@@ -235,6 +235,7 @@ try {
     for (const linker of ["node-modules", "pnp"]) {
       const local = project(linker, { packageManager: "yarn@4.12.0" });
       writeFileSync(join(local, ".yarnrc.yml"), `nodeLinker: ${linker}\n`);
+      writeFileSync(join(local, "yarn.lock"), "");
       tool("corepack", ["yarn", "add", `real-size@file:${tarball}`], local);
       if (linker === "node-modules")
         for (const command of commands)
@@ -254,6 +255,7 @@ try {
       );
     }
     const dlx = project("dlx", { packageManager: "yarn@4.12.0" });
+    writeFileSync(join(dlx, "yarn.lock"), "");
     attempt("yarn dlx", true, () =>
       spawnSync(
         "corepack",
