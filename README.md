@@ -61,10 +61,12 @@ npx --package real-size real-size-windows node_modules
 
 npm and pnpm generate Windows launchers from a command's `#!` line, so the
 `real-size` command's `#!/bin/sh` needs an `sh` on Windows (Git Bash has one;
-cmd.exe and PowerShell do not). `real-size-windows` points at the x64 binary,
-which the launchers start directly in cmd.exe, Windows PowerShell and
-PowerShell, without Node; Windows on Arm runs it under emulation. The library
-uses the native arm64 binary.
+cmd.exe and PowerShell do not). `real-size-windows` is a batch file with no
+`#!` line, which the launchers start directly in cmd.exe, Windows PowerShell
+and PowerShell, without Node. It runs the arm64 binary on Windows on Arm and
+the x64 binary otherwise, and returns its exit status. `real-size --version`
+prints the version and the binary's platform, for example `0.1.0
+(win32-arm64)`.
 
 ## Command line
 
@@ -289,8 +291,8 @@ on APFS, the extent map on btrfs and XFS, and the link count on Windows.
 - On Windows the command is `real-size-windows`, not `real-size`, in cmd.exe
   and PowerShell (see [Install](#install)). Yarn classic's Windows launchers
   are not guaranteed.
-- On macOS and Linux, `real-size` and `real-size-windows` are both installed;
-  the second is useless there.
+- On macOS and Linux, `real-size-windows` is installed too; run there, it
+  prints that the command is `real-size` and exits with status 2.
 - On Windows, files compressed by the Windows Overlay Filter (`compact
 /exe`) report their main stream's allocation.
 

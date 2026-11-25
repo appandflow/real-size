@@ -25,6 +25,7 @@ test(
     for (const file of [
       "skill/SKILL.md",
       "bin/real-size",
+      "bin/real-size-windows.cmd",
       "index.mjs",
       "index.d.mts",
       "LICENSE",

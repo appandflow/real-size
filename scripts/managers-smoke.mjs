@@ -99,6 +99,37 @@ function shells(scope, binDirectory, command, required) {
     ...process.env,
     PATH: [binDirectory, basePath].join(delimiter),
   };
+  if (command === "real-size-windows") {
+    const expected = [
+      process.env.PROCESSOR_ARCHITECTURE,
+      process.env.PROCESSOR_ARCHITEW6432,
+    ].includes("ARM64")
+      ? "win32-arm64"
+      : "win32-x64";
+    for (const [shell, args] of [
+      ["cmd.exe", ["/d", "/s", "/c", `"${command} --version"`]],
+      [
+        "pwsh.exe",
+        ["-NoProfile", "-Command", `${command} --version; exit $LASTEXITCODE`],
+      ],
+    ]) {
+      const run = spawnSync(shell, args, {
+        encoding: "utf8",
+        env,
+        windowsVerbatimArguments: shell === "cmd.exe",
+      });
+      const outcome =
+        run.status === 0 && run.stdout.includes(`(${expected})`)
+          ? "ok"
+          : `exit ${run.status}: ${(run.stdout + run.stderr).trim()}`;
+      if (required && outcome !== "ok") failed = true;
+      results.push({
+        label: `${scope}: ${command} --version is ${expected} (${shell})`,
+        required,
+        outcome,
+      });
+    }
+  }
   attempt(`${scope}: ${command} (cmd.exe)`, required, () =>
     spawnSync("cmd.exe", ["/d", "/s", "/c", `"${command} --json "${tree}""`], {
       encoding: "utf8",

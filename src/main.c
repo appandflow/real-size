@@ -11,6 +11,11 @@
 #else
 #define VERSION_STRING "dev"
 #endif
+#ifdef REAL_SIZE_TARGET
+#define TARGET_STRING STRINGIFY(REAL_SIZE_TARGET)
+#else
+#define TARGET_STRING "unknown"
+#endif
 
 static void out_of_memory(void) {
   fputs("real-size: out of memory\n", stderr);
@@ -155,7 +160,7 @@ int real_size_main(int argc, char **argv) {
            "cannot report the bytes deleting a path would free.");
       return 0;
     } else if (options && strcmp(arg, "--version") == 0) {
-      puts(VERSION_STRING);
+      puts(VERSION_STRING " (" TARGET_STRING ")");
       return 0;
     } else if (options && arg[0] == '-' && arg[1] != 0) {
       fprintf(stderr, "real-size: unknown option %s\n%s", arg, usage);

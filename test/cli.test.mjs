@@ -15,10 +15,13 @@ const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 );
 
-test("--version prints the package version", () => {
+test("--version prints the package version and the build target", () => {
   const run = cli(["--version"]);
   assert.equal(run.status, 0);
-  assert.equal(run.stdout.trim(), version);
+  assert.equal(
+    run.stdout.trim(),
+    `${version} (${process.platform}-${process.arch})`,
+  );
 });
 
 test("--help prints usage and exits 0", () => {

@@ -5,6 +5,7 @@ import { binaryName, targets } from "./targets.mjs";
 
 const executables = [
   "bin/real-size",
+  "bin/real-size-windows.cmd",
   ...targets.map((target) => `prebuilds/${target}/${binaryName(target)}`),
 ];
 for (const file of executables) {
