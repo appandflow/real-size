@@ -26,4 +26,4 @@ jobs:
         with:
           name: npm-package
           path: package
-      - run: npm publish package/real-size-*.tgz --provenance --access public
+      - run: npm publish ./package/real-size-*.tgz --provenance --access public

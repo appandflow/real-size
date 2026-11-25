@@ -40,7 +40,7 @@ npm install --global real-size
 Or run it without installing: `npx real-size <path>`.
 
 The package ships prebuilt binaries and has no install scripts and no runtime
-dependencies. On macOS and Linux the installed `real-size` command is a small
+dependencies. On macOS and Linux the `real-size` command npm installs is a small
 `sh` script that starts the binary directly, so it runs without Node; with
 `npx`, `npx` itself is the only Node process involved. On Windows npm's
 generated `real-size.cmd` and `real-size.ps1` start Node, which starts the
@@ -227,8 +227,10 @@ Microsoft documents it in the protocol specifications only, and the count it
 reports is the count of the cluster each extent starts at. A file whose
 extents cannot be read counts as entirely shared, as on Linux.
 
-Cloud placeholders (OneDrive and other Cloud Files providers) are never
-hydrated: the walk reads attributes only, and a file marked
+Cloud placeholders (OneDrive and other Cloud Files providers) are not read:
+the walk opens each file for its attributes only, which Microsoft's
+placeholder guidance treats as an attribute-only open that should not recall
+data, though no page guarantees it. A file marked
 `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`, `RECALL_ON_OPEN` or `OFFLINE`
 contributes its local allocation, which for a dehydrated placeholder is close
 to zero. Data Deduplication on Windows Server stores optimized files in a
@@ -252,8 +254,11 @@ once. Network shares (UNC paths and mapped drives) exit with status 2.
   block cloning.
 - On BusyBox systems such as Alpine, the installed `real-size` command needs
   coreutils for `env -S`. The binary and the library work without it.
-- npm's Windows launchers are tested. pnpm and Yarn generate their own Windows
-  launchers, which have not been tested.
+- The installed command works with npm and `npx`. pnpm writes its own
+  launcher from the first line, does not understand the `env -S` arguments,
+  and produces a `node_modules/.bin/real-size` that fails on every platform.
+  With pnpm, run `node_modules/real-size/bin/real-size` directly on macOS and
+  Linux, or use the library. Yarn's launchers have not been tested.
 - On Windows, files compressed by the Windows Overlay Filter (`compact
 /exe`) report their main stream's allocation.
 

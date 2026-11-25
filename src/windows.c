@@ -116,8 +116,9 @@ static int add_entry(size_t length, DWORD attributes, struct totals *totals) {
 }
 
 /* Reparse points whose tag is a name surrogate (symbolic links, junctions, volume mount points) name another file
- * and are not followed. Other reparse points, such as cloud placeholders, are ordinary files and folders here; the
- * walk opens files for their attributes only, which does not recall placeholder contents. */
+ * and are not followed. Other reparse points, such as cloud placeholders, are ordinary files and folders here. Files
+ * are opened for FILE_READ_ATTRIBUTES only, an attribute-only open that placeholder filters are expected not to turn
+ * into a recall: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/placeholders_guidance */
 static int walk(size_t length, struct totals *totals, int depth) {
   if (length + 2 >= PATH_CAPACITY) return fail(ERROR_FILENAME_EXCED_RANGE);
   if (path[length - 1] != L'\\') path[length++] = L'\\';

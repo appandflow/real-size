@@ -13,9 +13,10 @@ published by hand from the CI artifact of the commit being released:
 ```sh
 gh run download <run-id> --repo appandflow/real-size --name npm-package --dir release
 npm login
-npm publish release/real-size-0.1.0.tgz --access public
+npm publish ./release/real-size-0.1.0.tgz --access public
 ```
 
+The `./` matters: without it npm reads `release/...` as a GitHub repository.
 `<run-id>` is the green CI run of the commit on `main` (see
 `gh run list --repo appandflow/real-size --branch main --workflow CI`). Publish
 the tarball CI built; do not run `npm publish` from a checkout, because a local
