@@ -13,8 +13,12 @@ package. npm staged that first publish: for about a minute the registry showed
 a stub version `0.0.0-stage` before 0.1.0 appeared, and the stub stays listed
 in the package's versions.
 
-Before the first tag-driven release, configure the trusted publisher on
-npmjs.com, in the package's Settings, under Trusted Publisher:
+The repository has no `v0.1.0` tag: the release workflow at `ba0d021` cannot
+skip a version that already exists, so a tag there would run a failing
+publish. Commit `ba0d021` is the 0.1.0 source.
+
+The trusted publisher is configured on npmjs.com (package Settings, Trusted
+Publisher), so the next version is the first tag-driven release:
 
 | Field                | Value          |
 | -------------------- | -------------- |
@@ -37,9 +41,6 @@ Publish the tarball CI built; a local checkout holds only the binary for the
 machine it was built on.
 
 ## Tag-driven releases
-
-`.github/workflows/release.yml` works only once the trusted publisher above is
-configured.
 
 1. Bump `version` in `package.json` and merge it to `main`.
 2. Tag the merge commit `v<version>` and push the tag.
