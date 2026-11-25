@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { linkSync, mkdirSync, symlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  symlinkSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { cli, MiB, measure, near, scratch, write } from "./helpers.mjs";
@@ -115,5 +124,32 @@ test(
     assert.equal(fresh.private, fresh.allocated);
     assert.equal(fresh.exact, true);
     assert.equal(cli(["--json", root]).status, 0);
+  },
+);
+
+test(
+  "Windows ReFS: a clone rewritten in part keeps only its shared part out of private",
+  {
+    skip:
+      !windows || !refs || !cloneTool
+        ? "set REAL_SIZE_REFS_DIR and REAL_SIZE_CLONE_TOOL"
+        : false,
+  },
+  (t) => {
+    const root = scratch(t, refs);
+    write(join(root, "outside", "source"), 4 * MiB);
+    mkdirSync(join(root, "tree"));
+    execFileSync(cloneTool, [
+      join(root, "outside", "source"),
+      join(root, "tree", "clone"),
+    ]);
+    const file = openSync(join(root, "tree", "clone"), "r+");
+    writeSync(file, randomBytes(2 * MiB), 0, 2 * MiB, 2 * MiB);
+    fsyncSync(file);
+    closeSync(file);
+    const size = measure(join(root, "tree"));
+    near(size.allocated, 4 * MiB);
+    near(size.private, 2 * MiB);
+    assert.equal(size.exact, false);
   },
 );

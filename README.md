@@ -56,10 +56,10 @@ Each path is measured on its own. Plain output prints one line per path, and a
 total when several paths are given:
 
 ```console
-$ real-size ios/build android/build
-ios/build: 1.2 GB private, 1.2 GB allocated, 20391 files
-android/build: at least 310.4 MB private, 402.0 MB allocated, 8812 files
-total: at least 1.5 GB private, 1.6 GB allocated, 29203 files
+$ real-size build packages
+build: at least 24.6 kB private, 167.9 kB allocated, 3 files
+packages: at least 94.7 MB private, 19.8 GB allocated, 68181 files
+total: at least 94.7 MB private, 19.8 GB allocated, 68184 files
 ```
 
 Sizes use decimal units (1 MB is 1,000,000 bytes). "at least" marks a result

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -79,4 +85,26 @@ test("Node runs the launcher the way npm's Windows shims do", (t) => {
     { encoding: "utf8" },
   );
   assert.equal(failed.status, 1);
+});
+
+test("without a prebuilt binary the launcher prints one line and exits 2", (t) => {
+  const root = scratch(t);
+  mkdirSync(join(root, "bin"));
+  copyFileSync(launcher, join(root, "bin", "real-size"));
+  const runs = [
+    spawnSync(process.execPath, [join(root, "bin", "real-size"), "."], {
+      encoding: "utf8",
+    }),
+  ];
+  if (posix) {
+    chmodSync(join(root, "bin", "real-size"), 0o755);
+    runs.push(
+      spawnSync(join(root, "bin", "real-size"), ["."], { encoding: "utf8" }),
+    );
+  }
+  for (const run of runs) {
+    assert.equal(run.status, 2, run.stderr);
+    assert.equal(run.stdout, "");
+    assert.match(run.stderr, /^real-size: no prebuilt binary for .+\n$/);
+  }
 });

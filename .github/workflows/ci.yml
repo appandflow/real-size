@@ -1,6 +1,7 @@
 name: CI
 on:
   push:
+    branches: ["**"]
   pull_request:
   workflow_call:
 permissions:
@@ -47,6 +48,10 @@ jobs:
           file prebuilds/${{ matrix.target }}/real-size | tee /dev/stderr | grep -q 'statically linked'
           dash -n bin/real-size
           sh -n bin/real-size
+      - name: Launcher on Alpine (BusyBox env)
+        if: matrix.target == 'linux-x64'
+        continue-on-error: true
+        run: docker run --rm -v "$PWD":/w alpine /w/bin/real-size --json /w/src
       - name: btrfs and XFS loopback mounts
         if: runner.os == 'Linux'
         run: |
@@ -145,7 +150,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           dir=$(mktemp -d)
-          npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund package/real-size-*.tgz > /dev/null
+          npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund ./package/real-size-*.tgz > /dev/null
           mkdir "$dir/tree" && echo hi > "$dir/tree/file"
           time (for i in $(seq 20); do "$dir/node_modules/.bin/real-size" "$dir/tree" > /dev/null; done)
       - name: Global install in cmd.exe and PowerShell without sh
@@ -171,3 +176,4 @@ jobs:
           Check 'PowerShell' (pwsh -NoProfile -Command "real-size --json '$tree'; exit `$LASTEXITCODE")
           cmd /d /c "real-size --json $tree\missing"
           if ($LASTEXITCODE -ne 1) { throw "a missing path exited with $LASTEXITCODE, expected 1" }
+          exit 0
