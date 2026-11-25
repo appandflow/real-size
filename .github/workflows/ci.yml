@@ -48,10 +48,9 @@ jobs:
           file prebuilds/${{ matrix.target }}/real-size | tee /dev/stderr | grep -q 'statically linked'
           dash -n bin/real-size
           sh -n bin/real-size
-      - name: Launcher on Alpine (BusyBox env)
+      - name: Launcher on Alpine with coreutils
         if: matrix.target == 'linux-x64'
-        continue-on-error: true
-        run: docker run --rm -v "$PWD":/w alpine /w/bin/real-size --json /w/src
+        run: docker run --rm -v "$PWD":/w alpine sh -c 'apk add -q coreutils && /w/bin/real-size --json /w/src'
       - name: btrfs and XFS loopback mounts
         if: runner.os == 'Linux'
         run: |

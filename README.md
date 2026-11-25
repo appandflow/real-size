@@ -46,6 +46,12 @@ dependencies. On macOS and Linux the installed `real-size` command is a small
 generated `real-size.cmd` and `real-size.ps1` start Node, which starts the
 binary.
 
+The command's first line is `#!/usr/bin/env -S`, followed by arguments that
+make `env` start `sh` while npm's Windows shim generator reads `node`. It needs
+an `env` that supports `-S`: macOS, FreeBSD and GNU coreutils 8.30 or later
+have it. BusyBox `env` does not, so on Alpine and other BusyBox systems install
+coreutils (`apk add coreutils`) or call the binary from `binaryPath()`.
+
 ## Command line
 
 ```text
@@ -161,7 +167,8 @@ between `private` and `allocated`.
 | Windows, network shares     |            |            |                                   | Exit status 2                     |
 
 The Linux binaries are statically linked, so they run on glibc and musl
-distributions alike.
+distributions alike. The installed command needs `env -S` (see
+[Install](#install)).
 
 ### macOS
 
@@ -243,6 +250,10 @@ once. Network shares (UNC paths and mapped drives) exit with status 2.
 - On Linux, filesystems other than ext2/3/4, tmpfs, btrfs and XFS exit with
   status 2 even where an answer could be given, for example ZFS without
   block cloning.
+- On BusyBox systems such as Alpine, the installed `real-size` command needs
+  coreutils for `env -S`. The binary and the library work without it.
+- npm's Windows launchers are tested. pnpm and Yarn generate their own Windows
+  launchers, which have not been tested.
 - On Windows, files compressed by the Windows Overlay Filter (`compact
 /exe`) report their main stream's allocation.
 
