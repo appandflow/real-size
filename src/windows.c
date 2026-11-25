@@ -77,7 +77,49 @@ static uint64_t private_bytes(HANDLE file, uint64_t allocated, int *shared) {
   return unshared < allocated ? unshared : allocated;
 }
 
+/* GetFileInformationByName with FileStatBasicByNameInfo (3) returns FILE_STAT_BASIC_INFORMATION, link count included,
+ * without opening a handle. Kernel32 exports it from Windows 11 24H2 and Windows Server 2025:
+ * https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyname
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-file_stat_basic_information */
+struct stat_basic {
+  LARGE_INTEGER file_id;
+  LARGE_INTEGER creation_time;
+  LARGE_INTEGER last_access_time;
+  LARGE_INTEGER last_write_time;
+  LARGE_INTEGER change_time;
+  LARGE_INTEGER allocation_size;
+  LARGE_INTEGER end_of_file;
+  ULONG file_attributes;
+  ULONG reparse_tag;
+  ULONG number_of_links;
+  ULONG device_type;
+  ULONG device_characteristics;
+  ULONG reserved;
+  LARGE_INTEGER volume_serial_number;
+  BYTE file_id_128[16];
+};
+
+typedef BOOL(WINAPI *stat_by_name_function)(PCWSTR, int, PVOID, ULONG);
+static stat_by_name_function stat_by_name;
+
+static int add_entry_by_name(size_t length, struct totals *totals) {
+  struct stat_basic info;
+  BOOL found = stat_by_name(path, 3, &info, sizeof info);
+  DWORD error = found ? 0 : GetLastError();
+  path[length] = 0;
+  if (!found) return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? 0 : fail(error);
+  uint64_t ino, ino_high, allocated = (uint64_t)info.allocation_size.QuadPart;
+  memcpy(&ino, info.file_id_128, sizeof ino);
+  memcpy(&ino_high, info.file_id_128 + 8, sizeof ino_high);
+  add_file(totals, (uint64_t)info.volume_serial_number.QuadPart, ino, ino_high, info.number_of_links, allocated,
+           allocated, 0);
+  return 0;
+}
+
 static int add_entry(size_t length, DWORD attributes, struct totals *totals) {
+  if (stat_by_name && !refcounted &&
+      !(attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE)))
+    return add_entry_by_name(length, totals);
   HANDLE file = CreateFileW(path, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                             NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   path[length] = 0;
@@ -94,8 +136,10 @@ static int add_entry(size_t length, DWORD attributes, struct totals *totals) {
     return fail(error);
   }
   uint64_t ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow, ino_high = 0;
+  uint64_t volume = info.dwVolumeSerialNumber;
   FILE_ID_INFO id;
   if (GetFileInformationByHandleEx(file, FileIdInfo, &id, sizeof id)) {
+    volume = id.VolumeSerialNumber;
     memcpy(&ino, id.FileId.Identifier, sizeof ino);
     memcpy(&ino_high, id.FileId.Identifier + 8, sizeof ino_high);
   }
@@ -111,7 +155,7 @@ static int add_entry(size_t length, DWORD attributes, struct totals *totals) {
       !(attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE)))
     private_size = private_bytes(file, allocated, &shared);
   CloseHandle(file);
-  add_file(totals, info.dwVolumeSerialNumber, ino, ino_high, info.nNumberOfLinks, allocated, private_size, shared);
+  add_file(totals, volume, ino, ino_high, info.nNumberOfLinks, allocated, private_size, shared);
   return 0;
 }
 
@@ -199,6 +243,9 @@ int measure(const char *utf8, struct totals *totals) {
   if (!GetVolumePathNameW(path, volume, MAX_PATH + 1)) return fail(GetLastError());
   if (GetDriveTypeW(volume) == DRIVE_REMOTE) return UNSUPPORTED;
   refcounted = (flags & FILE_SUPPORTS_BLOCK_REFCOUNTING) != 0;
+  if (!stat_by_name && !getenv("REAL_SIZE_NO_STAT_BY_NAME"))
+    stat_by_name = (stat_by_name_function)(void (*)(void))GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+                                                                         "GetFileInformationByName");
   if (refcounted) {
     DWORD sectors, bytes, free_clusters, clusters;
     if (!GetDiskFreeSpaceW(volume, &sectors, &bytes, &free_clusters, &clusters)) return fail(GetLastError());

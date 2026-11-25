@@ -94,6 +94,49 @@ jobs:
         with:
           name: prebuild-${{ matrix.target }}
           path: prebuilds/
+  bench:
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+          - os: macos-15-intel
+          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
+          - os: windows-latest
+            msvc: x64
+          - os: windows-11-arm
+            msvc: arm64
+    runs-on: ${{ matrix.os }}
+    name: bench (${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: ${{ matrix.msvc }}
+      - run: npm run build
+      - name: Benchmark on the runner's disk
+        shell: bash
+        run: node scripts/bench.mjs --cold --generate "$RUNNER_TEMP/bench"
+      - name: Benchmark on btrfs and XFS
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
+          for fs in btrfs xfs; do truncate -s 4G "$RUNNER_TEMP/$fs.img"; done
+          mkfs.btrfs -q "$RUNNER_TEMP/btrfs.img"
+          mkfs.xfs -q -m reflink=1 "$RUNNER_TEMP/xfs.img"
+          for fs in btrfs xfs; do
+            sudo mkdir -p "/mnt/$fs"
+            sudo mount -o loop "$RUNNER_TEMP/$fs.img" "/mnt/$fs"
+            sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
+            echo "### $fs"
+            node scripts/bench.mjs --cold --generate "/mnt/$fs/bench"
+          done
   package:
     needs: platforms
     runs-on: ubuntu-latest

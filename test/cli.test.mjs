@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { cli, measure, MiB, near, scratch, write } from "./helpers.mjs";
@@ -103,4 +110,27 @@ test("symbolic links are not followed, inside the tree or as the path itself", (
   const run = cli(["--json", join(root, "tree", "link")]);
   assert.equal(run.status, 1);
   assert.equal(run.stdout, "");
+});
+
+test("thousands of hard links count each file once", (t) => {
+  const root = scratch(t);
+  const inside = 3000;
+  const outside = 2000;
+  mkdirSync(join(root, "store"));
+  mkdirSync(join(root, "tree", "a"), { recursive: true });
+  mkdirSync(join(root, "tree", "b"));
+  for (let i = 0; i < inside + outside; i++) {
+    const store = join(root, "store", String(i));
+    writeFileSync(store, "x".repeat(5000));
+    linkSync(store, join(root, "tree", "a", String(i)));
+    if (i < inside) {
+      linkSync(store, join(root, "tree", "b", String(i)));
+      unlinkSync(store);
+    }
+  }
+  const size = measure(join(root, "tree"));
+  assert.equal(size.files, inside + outside);
+  const perFile = size.allocated / size.files;
+  near(size.private, inside * perFile, 0);
+  assert.equal(size.exact, true);
 });
