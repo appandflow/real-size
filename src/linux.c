@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <linux/fiemap.h>
 #include <linux/fs.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -83,20 +84,47 @@ static uint64_t private_bytes(int dirfd, const char *name, uint64_t allocated, i
  * tree; until then it is known by its path relative to the measured directory. */
 static char relative[PATH_MAX];
 
+static const char *root_path;
+static char shown[2 * PATH_MAX + NAME_MAX + 8];
+
+/* The path of `name` in the directory `relative` holds `length` bytes of, or of that directory when `name` is NULL, as
+ * the user wrote it. A directory whose relative path does not fit in `relative` is shown as `.../name`. */
+static const char *entry_path(size_t length, const char *name) {
+  size_t root_length = strlen(root_path);
+  const char *separator = root_length && root_path[root_length - 1] == '/' ? "" : "/";
+  int used;
+  if (length == 0) used = snprintf(shown, sizeof shown, "%s", root_path);
+  else if (length < sizeof relative)
+    used = snprintf(shown, sizeof shown, "%s%s%.*s", root_path, separator, (int)length - 1, relative + 1);
+  else used = snprintf(shown, sizeof shown, "%s%s...", root_path, separator);
+  if (name && used > 0 && (size_t)used < sizeof shown)
+    snprintf(shown + used, sizeof shown - (size_t)used, "%s%s", shown[used - 1] == '/' ? "" : "/", name);
+  return shown;
+}
+
+static void skip(struct totals *totals, size_t length, const char *name, int error, const char *reason) {
+  if (error == ENOENT || error == ENOTDIR) return;
+  if (skip_entry(totals)) skip_message(entry_path(length, name), reason ? reason : strerror(error));
+}
+
 static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals, int depth, size_t length) {
   DIR *dir = fdopendir(dirfd);
   if (!dir) {
     int saved = errno;
     close(dirfd);
     errno = saved;
-    return -1;
+    if (depth == 0) return -1;
+    skip(totals, length, NULL, saved, NULL);
+    return 0;
   }
+  if (progress_due()) progress_show(totals, entry_path(length, NULL));
   int result = 0;
   for (;;) {
     errno = 0;
     struct dirent *entry = readdir(dir);
     if (!entry) {
-      if (errno) result = -1;
+      if (errno && depth == 0) result = -1;
+      else if (errno) skip(totals, length, NULL, errno, NULL);
       break;
     }
     const char *name = entry->d_name;
@@ -109,30 +137,32 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
     }
     struct stat info;
     if (fstatat(dirfd, name, &info, AT_SYMLINK_NOFOLLOW) < 0) {
-      if (errno == ENOENT) continue;
-      result = -1;
-      break;
+      skip(totals, length, name, errno, NULL);
+      continue;
     }
     if (S_ISDIR(info.st_mode)) {
       if (depth + 1 >= MAX_DEPTH) {
-        errno = ELOOP;
-        result = -1;
-        break;
+        skip(totals, length, name, ELOOP, "more than " MAX_DEPTH_TEXT " nested directories");
+        continue;
       }
+      if (pause_at && strcmp(name, pause_at) == 0) test_pause(entry_path(length, name));
       int child = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
       if (child < 0) {
-        if (errno == ENOENT) continue;
-        result = -1;
-        break;
+        skip(totals, length, name, errno, NULL);
+        continue;
       }
       enum volume child_volume = volume;
       if (info.st_dev != dev) {
-        result = classify(child, &child_volume);
-        if (result < 0) {
+        int classified = classify(child, &child_volume);
+        if (classified < 0) {
           int saved = errno;
           close(child);
-          errno = saved;
-          break;
+          if (classified == UNSUPPORTED) {
+            result = UNSUPPORTED;
+            break;
+          }
+          skip(totals, length, name, saved, NULL);
+          continue;
         }
       }
       result = walk(child, info.st_dev, child_volume, totals, depth + 1, child_length);
@@ -165,6 +195,7 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
 int measure(const char *path, struct totals *totals) {
   int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (dirfd < 0) return -1;
+  root_path = path;
   struct stat info;
   enum volume volume = LINK_COUNTED;
   int classified = fstat(dirfd, &info) < 0 ? -1 : classify(dirfd, &volume);

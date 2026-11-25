@@ -62,8 +62,8 @@ test("--json prints one document with every path and a total", (t) => {
   assert.deepEqual(
     result.paths.map((entry) => Object.keys(entry)),
     [
-      ["path", "allocated", "private", "files", "exact"],
-      ["path", "allocated", "private", "files", "exact"],
+      ["path", "allocated", "private", "files", "exact", "skipped"],
+      ["path", "allocated", "private", "files", "exact", "skipped"],
     ],
   );
   assert.deepEqual(
@@ -80,6 +80,7 @@ test("--json prints one document with every path and a total", (t) => {
     "private",
     "files",
     "exact",
+    "skipped",
   ]);
   assert.equal(result.total.files, 3);
   assert.equal(
