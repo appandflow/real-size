@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/fiemap.h>
 #include <linux/fs.h>
 #include <string.h>
@@ -78,7 +79,11 @@ static uint64_t private_bytes(int dirfd, const char *name, uint64_t allocated, i
   return unshared < allocated ? unshared : allocated;
 }
 
-static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals, int depth) {
+/* A file with several links on btrfs or XFS is mapped only after the walk, and only when every link was inside the
+ * tree; until then it is known by its path relative to the measured directory. */
+static char relative[PATH_MAX];
+
+static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals, int depth, size_t length) {
   DIR *dir = fdopendir(dirfd);
   if (!dir) {
     int saved = errno;
@@ -96,6 +101,12 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
     }
     const char *name = entry->d_name;
     if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
+    size_t name_length = strlen(name);
+    size_t child_length = length + name_length + 1;
+    if (child_length < sizeof relative) {
+      relative[length] = '/';
+      memcpy(relative + length + 1, name, name_length + 1);
+    }
     struct stat info;
     if (fstatat(dirfd, name, &info, AT_SYMLINK_NOFOLLOW) < 0) {
       if (errno == ENOENT) continue;
@@ -124,15 +135,25 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
           break;
         }
       }
-      result = walk(child, info.st_dev, child_volume, totals, depth + 1);
+      result = walk(child, info.st_dev, child_volume, totals, depth + 1, child_length);
       if (result < 0) break;
     } else if (S_ISREG(info.st_mode)) {
       uint64_t allocated = (uint64_t)info.st_blocks * 512;
       uint64_t private_size = allocated;
       int shared = 0;
-      if (volume == EXTENT_MAPPED && allocated > 0) private_size = private_bytes(dirfd, name, allocated, &shared);
-      add_file(totals, (uint64_t)info.st_dev, (uint64_t)info.st_ino, 0, (uint32_t)info.st_nlink, allocated,
-               private_size, shared);
+      int defer = volume == EXTENT_MAPPED && allocated > 0 && info.st_nlink > 1 && child_length < sizeof relative;
+      if (volume == EXTENT_MAPPED && allocated > 0 && !defer)
+        private_size = private_bytes(dirfd, name, allocated, &shared);
+      struct inode *linked = add_file(totals, (uint64_t)info.st_dev, (uint64_t)info.st_ino, 0,
+                                      (uint32_t)info.st_nlink, allocated, private_size, shared);
+      if (linked && defer) {
+        linked->deferred = strdup(relative + 1);
+        if (!linked->deferred) {
+          errno = ENOMEM;
+          result = -1;
+          break;
+        }
+      }
     }
   }
   int saved = errno;
@@ -153,7 +174,23 @@ int measure(const char *path, struct totals *totals) {
     errno = saved;
     return classified;
   }
-  return walk(dirfd, info.st_dev, volume, totals, 0);
+  int root = dup(dirfd);
+  if (root < 0) {
+    int saved = errno;
+    close(dirfd);
+    errno = saved;
+    return -1;
+  }
+  int result = walk(dirfd, info.st_dev, volume, totals, 0, 0);
+  for (size_t i = 0; result == 0 && i < totals->linked_count; i++) {
+    struct inode *entry = &totals->linked[i];
+    if (entry->deferred && entry->seen >= entry->links)
+      entry->private_size = private_bytes(root, entry->deferred, entry->private_size, &entry->shared);
+  }
+  int saved = errno;
+  close(root);
+  errno = saved;
+  return result;
 }
 
 const char *measure_error(void) { return strerror(errno); }

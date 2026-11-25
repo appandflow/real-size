@@ -63,6 +63,27 @@ for (const mount of linux ? reflinkRoots : []) {
     assert.equal(size.exact, false);
   });
 
+  test(`Linux reflinks on ${mount}: hard-linked files are mapped once every link is seen`, (t) => {
+    const root = scratch(t, mount);
+    write(join(root, "outside", "source"), 2 * MiB);
+    write(join(root, "tree", "own"));
+    execFileSync("cp", [
+      "--reflink=always",
+      join(root, "outside", "source"),
+      join(root, "tree", "clone"),
+    ]);
+    linkSync(join(root, "tree", "own"), join(root, "tree", "own-link"));
+    linkSync(join(root, "tree", "clone"), join(root, "tree", "clone-link"));
+    write(join(root, "outside", "linked"));
+    linkSync(join(root, "outside", "linked"), join(root, "tree", "linked-out"));
+    execFileSync("sync");
+    const size = measure(join(root, "tree"));
+    assert.equal(size.files, 3);
+    near(size.allocated, 4 * MiB);
+    near(size.private, MiB);
+    assert.equal(size.exact, false);
+  });
+
   test(`Linux reflinks on ${mount}: a tree without shared extents is exact`, (t) => {
     const root = scratch(t, mount);
     write(join(root, "tree", "a"));

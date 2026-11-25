@@ -15,6 +15,7 @@ struct inode {
   uint32_t links;
   uint32_t seen;
   int shared;
+  char *deferred;
 };
 
 struct totals {
@@ -30,8 +31,9 @@ struct totals {
 
 /* Counts one regular file. `shared` means part of `private_size` may be shared with another file, so the result is a
  * lower bound. A file with more than one link counts once per tree, and its private bytes count only when every link
- * was seen in the tree. */
-void add_file(struct totals *totals, uint64_t dev, uint64_t ino, uint64_t ino_high, uint32_t links, uint64_t allocated,
+ * was seen in the tree. Returns the file's entry when this call first recorded a file with more than one link, so the
+ * caller can defer measuring its private bytes until the walk shows every link inside; NULL otherwise. */
+struct inode *add_file(struct totals *totals, uint64_t dev, uint64_t ino, uint64_t ino_high, uint32_t links, uint64_t allocated,
               uint64_t private_size, int shared);
 
 /* Walks the directory at the UTF-8 `path`. Returns 0, -1 with errno set, or UNSUPPORTED. */

@@ -40,20 +40,20 @@ static void grow_slots(struct totals *totals) {
   }
 }
 
-void add_file(struct totals *totals, uint64_t dev, uint64_t ino, uint64_t ino_high, uint32_t links, uint64_t allocated,
+struct inode *add_file(struct totals *totals, uint64_t dev, uint64_t ino, uint64_t ino_high, uint32_t links, uint64_t allocated,
               uint64_t private_size, int shared) {
   if (links <= 1) {
     totals->allocated += allocated;
     totals->files++;
     totals->private_size += private_size;
     if (shared) totals->exact = 0;
-    return;
+    return NULL;
   }
   if ((totals->linked_count + 1) * 2 > totals->slot_capacity) grow_slots(totals);
   size_t slot = slot_of(totals, dev, ino, ino_high);
   if (totals->slots[slot]) {
     totals->linked[totals->slots[slot] - 1].seen++;
-    return;
+    return NULL;
   }
   if ((totals->linked_count & (totals->linked_count - 1)) == 0) {
     size_t capacity = totals->linked_count ? totals->linked_count * 2 : 1;
@@ -61,15 +61,17 @@ void add_file(struct totals *totals, uint64_t dev, uint64_t ino, uint64_t ino_hi
     if (!grown) out_of_memory();
     totals->linked = grown;
   }
-  totals->linked[totals->linked_count] = (struct inode){dev, ino, ino_high, private_size, links, 1, shared};
+  totals->linked[totals->linked_count] = (struct inode){dev, ino, ino_high, private_size, links, 1, shared, NULL};
   totals->slots[slot] = ++totals->linked_count;
   totals->allocated += allocated;
   totals->files++;
+  return &totals->linked[totals->linked_count - 1];
 }
 
 static void settle_links(struct totals *totals) {
   for (size_t i = 0; i < totals->linked_count; i++) {
     const struct inode *entry = &totals->linked[i];
+    free(entry->deferred);
     if (entry->seen < entry->links) continue;
     totals->private_size += entry->private_size;
     if (entry->shared) totals->exact = 0;
