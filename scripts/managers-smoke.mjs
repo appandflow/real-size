@@ -53,7 +53,7 @@ function tool(command, args, cwd, env = {}) {
   });
   if (run.status !== 0)
     throw new Error(
-      `${command} ${args.join(" ")} exited with ${run.status}\n${run.stdout}\n${run.stderr}`,
+      `${command} ${args.join(" ")} exited with ${run.status ?? run.error}\n${run.stdout}\n${run.stderr}`,
     );
   return run.stdout;
 }

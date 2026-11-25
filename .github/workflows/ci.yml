@@ -173,9 +173,12 @@ jobs:
           path: package
       - name: npm, pnpm, Yarn classic and Yarn Berry on Alpine with BusyBox
         run: |
-          docker run --rm -v "$PWD":/w -w /w node:22-alpine sh -c '
+          mkdir .scratch
+          docker run --rm -v "$PWD":/w -w /w -e TMPDIR=/w/.scratch node:22-alpine sh -c '
             ls -l /bin/sh /usr/bin/env
-            npm install --global pnpm@latest yarn@1 > /dev/null
+            npm install --global pnpm@latest > /dev/null
+            pnpm --version
+            yarn --version
             status=0
             for manager in npm pnpm yarn-classic yarn-berry; do
               node scripts/managers-smoke.mjs "$manager" ./package/real-size-*.tgz || status=1
