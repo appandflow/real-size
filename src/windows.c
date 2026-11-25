@@ -270,7 +270,58 @@ static UINT console_code_page;
 
 static void restore_console(void) { SetConsoleOutputCP(console_code_page); }
 
+#if defined(_M_X64) && !defined(_M_ARM64EC)
+/* The npm and pnpm launchers of `real-size-windows` start the x64 binary. On an arm64 machine it starts the arm64
+ * binary next to it, prebuilds\win32-arm64\real-size.exe, with the same arguments, and returns its exit status.
+ * IsWow64Process2 reports the machine's native architecture to an emulated x64 process:
+ * https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-iswow64process2 */
+typedef BOOL(WINAPI *wow64_function)(HANDLE, USHORT *, USHORT *);
+
+static int run_native(DWORD *status) {
+  wow64_function wow64 =
+      (wow64_function)(void (*)(void))GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+  USHORT process_machine, native_machine;
+  if (!wow64 || !wow64(GetCurrentProcess(), &process_machine, &native_machine) ||
+      native_machine != IMAGE_FILE_MACHINE_ARM64)
+    return 0;
+  static wchar_t target[PATH_CAPACITY];
+  DWORD length = GetModuleFileNameW(NULL, target, PATH_CAPACITY);
+  const wchar_t suffix[] = L"\\win32-x64\\real-size.exe";
+  size_t suffix_length = wcslen(suffix);
+  if (length == 0 || length >= PATH_CAPACITY || length < suffix_length ||
+      _wcsicmp(target + length - suffix_length, suffix) != 0)
+    return 0;
+  wcscpy(target + length - suffix_length, L"\\win32-arm64\\real-size.exe");
+  if (GetFileAttributesW(target) == INVALID_FILE_ATTRIBUTES) return 0;
+  const wchar_t *arguments = GetCommandLineW();
+  if (*arguments == L'"') {
+    arguments++;
+    while (*arguments && *arguments != L'"') arguments++;
+    if (*arguments) arguments++;
+  } else
+    while (*arguments && *arguments != L' ' && *arguments != L'\t') arguments++;
+  size_t size = wcslen(target) + wcslen(arguments) + 3;
+  wchar_t *command = malloc(size * sizeof *command);
+  if (!command) return 0;
+  swprintf(command, size, L"\"%ls\"%ls", target, arguments);
+  STARTUPINFOW startup = {sizeof startup};
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  PROCESS_INFORMATION child;
+  if (!CreateProcessW(target, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child)) return 0;
+  WaitForSingleObject(child.hProcess, INFINITE);
+  if (!GetExitCodeProcess(child.hProcess, status)) *status = 1;
+  return 1;
+}
+#endif
+
 int wmain(int argc, wchar_t **wide) {
+#if defined(_M_X64) && !defined(_M_ARM64EC)
+  DWORD status;
+  if (run_native(&status)) return (int)status;
+#endif
   char **argv = calloc((size_t)argc + 1, sizeof *argv);
   if (!argv) return 1;
   for (int i = 0; i < argc; i++) {

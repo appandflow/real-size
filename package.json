@@ -13,7 +13,7 @@
   ],
   "bin": {
     "real-size": "bin/real-size",
-    "real-size-windows": "bin/real-size-windows.cmd"
+    "real-size-windows": "prebuilds/win32-x64/real-size.exe"
   },
   "exports": {
     ".": {

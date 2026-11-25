@@ -108,19 +108,3 @@ test("without a prebuilt binary the launcher prints one line and exits 2", (t) =
     assert.match(run.stderr, /^real-size: no prebuilt binary for .+\n$/);
   }
 });
-
-test(
-  "the Windows launcher run by sh on macOS or Linux points to real-size",
-  { skip: !posix },
-  () => {
-    const run = spawnSync(
-      "sh",
-      [fileURLToPath(new URL("../bin/real-size-windows.cmd", import.meta.url))],
-      {
-        encoding: "utf8",
-      },
-    );
-    assert.equal(run.status, 2);
-    assert.match(run.stderr, /run real-size here/);
-  },
-);
