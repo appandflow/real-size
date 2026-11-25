@@ -1,6 +1,6 @@
 {
   "name": "real-size",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The bytes deleting a folder would actually free, on APFS clones, hard links and reflinks",
   "type": "module",
   "engines": {

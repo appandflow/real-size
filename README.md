@@ -125,6 +125,11 @@ real-size: and 3 more entries could not be read
 /Users/me/Library: at least 2.1 GB private, 9.8 GB allocated, 210377 files (4 entries could not be read)
 ```
 
+A volume mounted inside the tree whose filesystem cannot report what deleting
+it would free, for example a FAT or HFS+ disk image or an FSKit volume on
+macOS, is skipped the same way, as one entry, with the reason "another
+filesystem that cannot report private size". Nothing in it is counted.
+
 The sizes are then lower bounds: `skipped` counts the entries left out and
 `exact` is `false`. Like `du`, the command prints the result and exits with
 status 1. An entry deleted while the walk runs is not an error: it frees
@@ -134,7 +139,7 @@ nothing, so it is left out without a message and does not count in `skipped`.
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0           | Every path was measured in full.                                                                                                                                                |
 | 1           | Some entries could not be read: the result is on stdout with `skipped` above 0. Or a usage error, or a path itself could not be read: the reason is on stderr, stdout is empty. |
-| 2           | The filesystem cannot report what deleting a path would free. Stdout is empty.                                                                                                  |
+| 2           | The filesystem a path itself is on cannot report what deleting it would free. Stdout is empty.                                                                                  |
 
 With exit status 1, a result on stdout tells the two cases apart.
 
@@ -190,8 +195,9 @@ TypeScript types are included. Node `^20.19.4 || >=22.12.0`.
 - `files`: the regular files counted, each hard-linked file once.
 - `exact`: `true` when `private` is the exact answer, `false` when it is a
   lower bound.
-- `skipped`: entries that could not be read and were left out. Above 0, every
-  size is a lower bound and `exact` is `false`. Added in 0.1.1.
+- `skipped`: entries that could not be read and were left out, including
+  volumes mounted inside the tree that cannot report private sizes. Above 0,
+  every size is a lower bound and `exact` is `false`. Added in 0.1.1.
 
 Directories, symbolic links and metadata are not counted. Symbolic links are
 never followed, and neither are Windows junctions.
@@ -226,8 +232,11 @@ distributions alike.
 
 The walk uses `getattrlistbulk` and reads each file's
 `ATTR_CMNEXT_PRIVATESIZE`, which APFS reports as the bytes the file does not
-share with a clone. On a volume that does not report it (HFS+, FAT, SMB) the
-exit status is 2. The walk descends into volumes mounted inside the tree.
+share with a clone. Only APFS reports it: on another volume format (HFS+, FAT,
+SMB, FSKit volumes) the exit status is 2 before anything is walked. The walk
+descends into volumes mounted inside the tree. Another APFS volume is measured
+like the rest; any other volume is skipped as one entry and nothing in it is
+counted.
 
 APFS also reports a private size below the allocation for transparently
 compressed files (decmpfs, for example files installed by some system tools),
@@ -249,8 +258,10 @@ the tree:
   mapping fails, counts as entirely shared: it adds to `allocated`, nothing to
   `private`, and sets `exact: false`.
 - Any other filesystem (overlayfs, NFS, ZFS, bcachefs, FUSE mounts, sysfs
-  and so on) exits with status 2, because it may share blocks in ways the
-  walk cannot see. Container users meet this first: a Docker container's root
+  and so on) cannot tell, because it may share blocks in ways the walk cannot
+  see. When the measured path is on one, the exit status is 2. When one is
+  mounted inside the tree, it is skipped as one entry and nothing in it is
+  counted. Container users meet this first: a Docker container's root
   is overlayfs, while a bind-mounted host folder on ext4 works.
 
 ### Windows

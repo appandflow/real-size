@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.2
+
+- A volume mounted inside the measured tree whose filesystem cannot report
+  private sizes no longer fails the whole measurement with exit status 2. It
+  is skipped as one entry, named on stderr with its path and the reason
+  "another filesystem that cannot report private size", and nothing in it is
+  counted. The result is printed, `exact` is `false` and the exit status is
+  1. On macOS 0.1.1 walked until it met a file on such a volume, for example
+     the FSKit volume under `~/Library/Developer/CoreDevice/DeviceFS`, and then
+     stopped with no result, so `real-size ~` could run for minutes and print
+     only an error. Linux had the same rule for nested mounts such as FUSE or
+     overlayfs; it now skips them too.
+- On macOS a measured path that is not on APFS exits with status 2 at once,
+  before any walk. A directory on such a volume that holds no regular files,
+  which 0.1.1 reported as 0 bytes with exit status 0, now exits with status 2
+  as well.
+
 ## 0.1.1
 
 - An entry that cannot be read, such as a directory without read permission,
