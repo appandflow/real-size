@@ -83,7 +83,8 @@ static size_t append_utf8(size_t used, const wchar_t *text, size_t length) {
 }
 
 static size_t append_separator(size_t used) {
-  if (used > 0 && shown[used - 1] != '\\' && shown[used - 1] != '/' && used < sizeof shown - 1) shown[used++] = '\\';
+  if (used > 0 && shown[used - 1] != '\\' && shown[used - 1] != '/' && shown[used - 1] != ':' && used < sizeof shown - 1)
+    shown[used++] = '\\';
   return used;
 }
 
@@ -271,10 +272,11 @@ static int walk(size_t length, struct totals *totals, int depth) {
     }
   } while (FindNextFileW(find, &data));
   DWORD error = GetLastError();
+  int gone = error != ERROR_NO_MORE_FILES && vanished(error);
   FindClose(find);
   if (error == ERROR_NO_MORE_FILES) return 0;
   if (depth == 0) return fail(error);
-  if (!vanished(error)) skip(totals, length, NULL, error, NULL);
+  if (!gone) skip(totals, length, NULL, error, NULL);
   return 0;
 }
 

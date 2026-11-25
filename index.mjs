@@ -91,7 +91,10 @@ export function realSize(paths, options = {}) {
     );
     child.on("close", (exitCode, exitSignal) =>
       finish(() => {
-        const message = stderr.trim().replace(/^real-size: /, "");
+        const message = (stderr.trim().split(/\r?\n/).at(-1) ?? "").replace(
+          /^real-size: /,
+          "",
+        );
         const partial = exitCode === 1 ? parsePartial(stdout) : null;
         if (partial) resolve(partial);
         else if (exitCode === 0) {

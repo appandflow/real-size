@@ -49,7 +49,9 @@ test("a directory deleted during the walk is skipped without a message", async (
       child.stdin.end("\n");
     }
   });
+  const timer = setTimeout(() => child.kill(), 30000);
   const status = await new Promise((resolve) => child.on("close", resolve));
+  clearTimeout(timer);
   assert.equal(
     stderr.replace(/\r\n/g, "\n"),
     `real-size: test pause at tree${sep}gone\n`,
@@ -93,7 +95,7 @@ test(
       assert.equal(plain.status, 1);
       assert.match(
         plain.stdout,
-        /^tree: at least \d+(\.\d)? k?B private, .+ allocated, 1 files \(1 entries could not be read\)\n$/,
+        /^tree: at least \d+(\.\d)? k?B private, .+ allocated, 1 files \(1 entries could not be read\)\r?\n$/,
       );
     });
   },

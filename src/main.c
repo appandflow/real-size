@@ -143,25 +143,27 @@ static size_t columns(const char *text, size_t bytes) {
 void progress_show(const struct totals *totals, const char *directory) {
   size_t width = (size_t)terminal_width();
   if (width < 20) width = 80;
-  if (width > sizeof progress_line / 2) width = sizeof progress_line / 2;
-  width--;
+  if (width > sizeof progress_line / 4) width = sizeof progress_line / 4;
   int prefix = snprintf(progress_line, sizeof progress_line, "\r%llu files, ",
                         (unsigned long long)(progress_base + totals->files));
-  if (prefix < 0) return;
-  size_t used = (size_t)prefix, room = width + 1 > used ? width + 1 - used : 0;
-  size_t length = strlen(directory);
-  if (columns(directory, length) > room && room > 3) {
-    while (*directory && columns(directory, length) > room - 3) {
-      directory++;
-      while (((unsigned char)*directory & 0xc0) == 0x80) directory++;
-      length = strlen(directory);
+  if (prefix < 0 || (size_t)prefix + 3 >= width) return;
+  size_t used = (size_t)prefix, room = width - used, bytes = sizeof progress_line / 2 - used;
+  size_t length = strlen(directory), start = 0;
+  if (columns(directory, length) > room || length > bytes) {
+    size_t kept = 0;
+    start = length;
+    while (start > 0) {
+      size_t previous = start - 1;
+      while (previous > 0 && ((unsigned char)directory[previous] & 0xc0) == 0x80) previous--;
+      if (kept + 1 > room - 3 || length - previous > bytes - 3) break;
+      kept++;
+      start = previous;
     }
     memcpy(progress_line + used, "...", 3);
     used += 3;
-  } else if (columns(directory, length) > room)
-    length = 0;
-  memcpy(progress_line + used, directory, length);
-  used += length;
+  }
+  memcpy(progress_line + used, directory + start, length - start);
+  used += length - start;
   size_t shown = columns(progress_line, used) - 1;
   for (size_t i = shown; i < progress_shown && used < sizeof progress_line; i++) progress_line[used++] = ' ';
   progress_shown = shown;
@@ -176,6 +178,11 @@ static void progress_clear(void) {
   progress_line[used++] = '\r';
   fwrite(progress_line, 1, used, stderr);
   progress_shown = 0;
+}
+
+static void report_unnamed(void) {
+  if (skips_unnamed)
+    fprintf(stderr, "real-size: and %llu more entries could not be read\n", (unsigned long long)skips_unnamed);
 }
 
 struct result {
@@ -286,12 +293,14 @@ int real_size_main(int argc, char **argv) {
     settle_links(&totals);
     if (measured == UNSUPPORTED) {
       progress_clear();
+      report_unnamed();
       fprintf(stderr, "real-size: %s: the filesystem cannot report the bytes deleting it would free\n", paths[i]);
       return 2;
     }
     if (measured < 0) {
       const char *message = measure_error();
       progress_clear();
+      report_unnamed();
       fprintf(stderr, "real-size: %s: %s\n", paths[i], message);
       return 1;
     }
@@ -305,8 +314,7 @@ int real_size_main(int argc, char **argv) {
     total.exact &= totals.exact;
   }
   progress_clear();
-  if (skips_unnamed)
-    fprintf(stderr, "real-size: and %llu more entries could not be read\n", (unsigned long long)skips_unnamed);
+  report_unnamed();
   if (json) {
     fputs("{\"paths\":[", stdout);
     for (int i = 0; i < count; i++) {
