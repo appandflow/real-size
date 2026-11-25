@@ -130,7 +130,7 @@ jobs:
           cc $flags "$RUNNER_TEMP/main-src/main.c" "$RUNNER_TEMP/main-src/linux.c" -o "$RUNNER_TEMP/rs-main"
           cc $flags -DRS_TYPE_SKIP=0 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-sort-only"
           cc $flags -DRS_SORT_THRESHOLD=1000000000 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-skip-only"
-          cc $flags -DRS_SORT_THRESHOLD=0 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-sort-all"
+          cc $flags -DRS_SORT_THRESHOLD=1 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-sort-all"
           echo "VARIANTS=--variant main=$RUNNER_TEMP/rs-main --variant sort-only=$RUNNER_TEMP/rs-sort-only --variant skip-only=$RUNNER_TEMP/rs-skip-only --variant sort-every-directory=$RUNNER_TEMP/rs-sort-all" >> "$GITHUB_ENV"
       - name: Benchmark on the runner's disk
         shell: bash
