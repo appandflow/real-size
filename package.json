@@ -48,7 +48,7 @@
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test --test-concurrency=1 test/cli.test.mjs test/api.test.mjs test/launcher.test.mjs test/darwin.test.mjs test/linux.test.mjs test/windows.test.mjs test/package.test.mjs",
+    "test": "node --test --test-concurrency=1 test/cli.test.mjs test/errors.test.mjs test/api.test.mjs test/launcher.test.mjs test/darwin.test.mjs test/linux.test.mjs test/windows.test.mjs test/package.test.mjs",
     "test:package": "node scripts/package-smoke.mjs",
     "pack:release": "node scripts/pack-release.mjs",
     "typecheck": "tsc",

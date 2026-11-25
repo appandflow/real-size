@@ -92,7 +92,9 @@ export function realSize(paths, options = {}) {
     child.on("close", (exitCode, exitSignal) =>
       finish(() => {
         const message = stderr.trim().replace(/^real-size: /, "");
-        if (exitCode === 0) {
+        const partial = exitCode === 1 ? parsePartial(stdout) : null;
+        if (partial) resolve(partial);
+        else if (exitCode === 0) {
           try {
             resolve(JSON.parse(stdout));
           } catch (error) {
@@ -116,4 +118,18 @@ export function realSize(paths, options = {}) {
       }),
     );
   });
+}
+
+/**
+ * Exit status 1 with a document on stdout means some entries could not be read and were skipped.
+ * @param {string} stdout
+ * @returns {import("./index.d.mts").RealSizeResult | null}
+ */
+function parsePartial(stdout) {
+  try {
+    const result = JSON.parse(stdout);
+    return result?.total?.skipped > 0 ? result : null;
+  } catch {
+    return null;
+  }
 }

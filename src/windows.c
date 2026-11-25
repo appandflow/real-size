@@ -47,6 +47,64 @@ static int fail(DWORD error) {
   return -1;
 }
 
+static const char *error_message(DWORD error) {
+  static char message[512];
+  wchar_t wide[256];
+  DWORD length =
+      FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error, 0, wide, 256, NULL);
+  while (length > 0 && (wide[length - 1] == L'\r' || wide[length - 1] == L'\n' || wide[length - 1] == L'.'))
+    wide[--length] = 0;
+  if (length == 0 || !WideCharToMultiByte(CP_UTF8, 0, wide, -1, message, sizeof message, NULL, NULL))
+    snprintf(message, sizeof message, "error %lu", (unsigned long)error);
+  return message;
+}
+
+/* A file deleted while a handle to it is open stays listed until the last handle closes, and opening it fails with
+ * ERROR_ACCESS_DENIED; only the thread's last NTSTATUS, STATUS_DELETE_PENDING, tells the two apart. ntdll exports
+ * RtlGetLastNtStatus, which is undocumented; without it such an entry is reported as unreadable. */
+typedef LONG(NTAPI *nt_status_function)(void);
+static nt_status_function last_nt_status;
+
+/* Call right after the failing call, before any other API call replaces the thread's last status. */
+static int vanished(DWORD error) {
+  if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND || error == ERROR_DELETE_PENDING) return 1;
+  return error == ERROR_ACCESS_DENIED && last_nt_status && last_nt_status() == (LONG)0xC0000056L;
+}
+
+static const char *root_utf8;
+static size_t root_length;
+static char shown[PATH_CAPACITY * 3 + 512];
+
+static size_t append_utf8(size_t used, const wchar_t *text, size_t length) {
+  if (length == 0 || used >= sizeof shown - 1) return used;
+  int written = WideCharToMultiByte(CP_UTF8, 0, text, (int)length, shown + used, (int)(sizeof shown - 1 - used), NULL,
+                                    NULL);
+  return written > 0 ? used + (size_t)written : used;
+}
+
+static size_t append_separator(size_t used) {
+  if (used > 0 && shown[used - 1] != '\\' && shown[used - 1] != '/' && used < sizeof shown - 1) shown[used++] = '\\';
+  return used;
+}
+
+/* The path of `name` in the directory path[0..length] holds, or of that directory when `name` is NULL, as the user
+ * wrote it. */
+static const char *entry_path(size_t length, const wchar_t *name) {
+  int written = snprintf(shown, sizeof shown, "%s", root_utf8);
+  size_t used = written > 0 && (size_t)written < sizeof shown ? (size_t)written : 0;
+  size_t start = root_length, end = length;
+  while (start < end && path[start] == L'\\') start++;
+  while (end > start && path[end - 1] == L'\\') end--;
+  if (end > start) used = append_utf8(append_separator(used), path + start, end - start);
+  if (name) used = append_utf8(append_separator(used), name, wcslen(name));
+  shown[used] = 0;
+  return shown;
+}
+
+static void skip(struct totals *totals, size_t length, const wchar_t *name, DWORD error, const char *reason) {
+  if (skip_entry(totals)) skip_message(entry_path(length, name), reason ? reason : error_message(error));
+}
+
 static uint64_t private_bytes(HANDLE file, uint64_t allocated, int *shared) {
   STARTING_VCN_INPUT_BUFFER input = {0};
   struct refcount_buffer output;
@@ -102,38 +160,46 @@ struct stat_basic {
 typedef BOOL(WINAPI *stat_by_name_function)(PCWSTR, int, PVOID, ULONG);
 static stat_by_name_function stat_by_name;
 
-static int add_entry_by_name(size_t length, struct totals *totals) {
+static void add_entry_by_name(size_t length, const wchar_t *name, struct totals *totals) {
   struct stat_basic info;
   BOOL found = stat_by_name(path, 3, &info, sizeof info);
   DWORD error = found ? 0 : GetLastError();
+  int gone = !found && vanished(error);
   path[length] = 0;
-  if (!found) return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? 0 : fail(error);
+  if (!found) {
+    if (!gone) skip(totals, length, name, error, NULL);
+    return;
+  }
   uint64_t ino, ino_high, allocated = (uint64_t)info.allocation_size.QuadPart;
   memcpy(&ino, info.file_id_128, sizeof ino);
   memcpy(&ino_high, info.file_id_128 + 8, sizeof ino_high);
   add_file(totals, (uint64_t)info.volume_serial_number.QuadPart, ino, ino_high, info.number_of_links, allocated,
            allocated, 0);
-  return 0;
 }
 
-static int add_entry(size_t length, DWORD attributes, struct totals *totals) {
+static void add_entry(size_t length, const wchar_t *name, DWORD attributes, struct totals *totals) {
   if (stat_by_name && !refcounted &&
-      !(attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE)))
-    return add_entry_by_name(length, totals);
+      !(attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE))) {
+    add_entry_by_name(length, name, totals);
+    return;
+  }
   HANDLE file = CreateFileW(path, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                             NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   path[length] = 0;
   if (file == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
-    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? 0 : fail(error);
+    if (!vanished(error)) skip(totals, length, name, error, NULL);
+    return;
   }
   BY_HANDLE_FILE_INFORMATION info;
   FILE_STANDARD_INFO standard;
   if (!GetFileInformationByHandle(file, &info) ||
       !GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof standard)) {
     DWORD error = GetLastError();
+    int gone = vanished(error);
     CloseHandle(file);
-    return fail(error);
+    if (!gone) skip(totals, length, name, error, NULL);
+    return;
   }
   uint64_t ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow, ino_high = 0;
   uint64_t volume = info.dwVolumeSerialNumber;
@@ -156,7 +222,6 @@ static int add_entry(size_t length, DWORD attributes, struct totals *totals) {
     private_size = private_bytes(file, allocated, &shared);
   CloseHandle(file);
   add_file(totals, volume, ino, ino_high, info.nNumberOfLinks, allocated, private_size, shared);
-  return 0;
 }
 
 /* Reparse points whose tag is a name surrogate (symbolic links, junctions, volume mount points) name another file
@@ -173,9 +238,12 @@ static int walk(size_t length, struct totals *totals, int depth) {
   path[length] = 0;
   if (find == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
-    return error == ERROR_FILE_NOT_FOUND ? 0 : fail(error);
+    if (error == ERROR_FILE_NOT_FOUND) return 0;
+    if (depth == 0) return fail(error);
+    if (!vanished(error)) skip(totals, length, NULL, error, NULL);
+    return 0;
   }
-  int result = 0;
+  if (progress_due()) progress_show(totals, entry_path(length, NULL));
   do {
     const wchar_t *name = data.cFileName;
     if (name[0] == L'.' && (name[1] == 0 || (name[1] == L'.' && name[2] == 0))) continue;
@@ -183,23 +251,31 @@ static int walk(size_t length, struct totals *totals, int depth) {
     if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) && IsReparseTagNameSurrogate(data.dwReserved0)) continue;
     size_t name_length = wcslen(name);
     if (length + name_length + 3 >= PATH_CAPACITY) {
-      result = fail(ERROR_FILENAME_EXCED_RANGE);
-      break;
+      skip(totals, length, name, ERROR_FILENAME_EXCED_RANGE, NULL);
+      continue;
     }
-    memcpy(path + length, name, (name_length + 1) * sizeof *name);
-    if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
-      if (depth + 1 >= MAX_DEPTH) {
-        result = fail(ERROR_CANT_RESOLVE_FILENAME);
-        break;
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+      memcpy(path + length, name, (name_length + 1) * sizeof *name);
+      add_entry(length, name, attributes, totals);
+    } else if (depth + 1 >= MAX_DEPTH)
+      skip(totals, length, name, 0, "more than " MAX_DEPTH_TEXT " nested directories");
+    else {
+      if (pause_at) {
+        char utf8[1024];
+        if (WideCharToMultiByte(CP_UTF8, 0, name, -1, utf8, sizeof utf8, NULL, NULL) && strcmp(utf8, pause_at) == 0)
+          test_pause(entry_path(length, name));
       }
-      result = walk(length + name_length, totals, depth + 1);
+      memcpy(path + length, name, (name_length + 1) * sizeof *name);
+      walk(length + name_length, totals, depth + 1);
       path[length] = 0;
-    } else result = add_entry(length, attributes, totals);
-    if (result < 0) break;
+    }
   } while (FindNextFileW(find, &data));
-  if (result == 0 && GetLastError() != ERROR_NO_MORE_FILES) result = fail(GetLastError());
+  DWORD error = GetLastError();
   FindClose(find);
-  return result;
+  if (error == ERROR_NO_MORE_FILES) return 0;
+  if (depth == 0) return fail(error);
+  if (!vanished(error)) skip(totals, length, NULL, error, NULL);
+  return 0;
 }
 
 static size_t extended_path(const char *utf8) {
@@ -225,6 +301,8 @@ int measure(const char *utf8, struct totals *totals) {
   size_t length = extended_path(utf8);
   if (length == (size_t)-1) return -1;
   while (length > 7 && path[length - 1] == L'\\' && path[length - 2] != L':') path[--length] = 0;
+  root_utf8 = utf8;
+  root_length = length;
   HANDLE root = CreateFileW(path, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                             NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   if (root == INVALID_HANDLE_VALUE) return fail(GetLastError());
@@ -246,6 +324,9 @@ int measure(const char *utf8, struct totals *totals) {
   if (!stat_by_name && !getenv("REAL_SIZE_NO_STAT_BY_NAME"))
     stat_by_name = (stat_by_name_function)(void (*)(void))GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
                                                                          "GetFileInformationByName");
+  if (!last_nt_status)
+    last_nt_status =
+        (nt_status_function)(void (*)(void))GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetLastNtStatus");
   if (refcounted) {
     DWORD sectors, bytes, free_clusters, clusters;
     if (!GetDiskFreeSpaceW(volume, &sectors, &bytes, &free_clusters, &clusters)) return fail(GetLastError());
@@ -254,17 +335,22 @@ int measure(const char *utf8, struct totals *totals) {
   return walk(length, totals, 0);
 }
 
-const char *measure_error(void) {
-  static char message[512];
-  wchar_t wide[256];
-  DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, last_error, 0, wide,
-                                256, NULL);
-  while (length > 0 && (wide[length - 1] == L'\r' || wide[length - 1] == L'\n' || wide[length - 1] == L'.'))
-    wide[--length] = 0;
-  if (length == 0 || !WideCharToMultiByte(CP_UTF8, 0, wide, -1, message, sizeof message, NULL, NULL))
-    snprintf(message, sizeof message, "error %lu", (unsigned long)last_error);
-  return message;
+const char *measure_error(void) { return error_message(last_error); }
+
+const char *environment(const char *name) { return getenv(name); }
+
+int stderr_is_terminal(void) {
+  DWORD mode;
+  return GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &mode) != 0;
 }
+
+int terminal_width(void) {
+  CONSOLE_SCREEN_BUFFER_INFO info;
+  if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_ERROR_HANDLE), &info)) return 0;
+  return info.srWindow.Right - info.srWindow.Left + 1;
+}
+
+uint64_t monotonic_ms(void) { return GetTickCount64(); }
 
 static UINT console_code_page;
 
