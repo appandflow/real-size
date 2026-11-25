@@ -81,11 +81,11 @@ try {
           "/d",
           "/s",
           "/c",
-          `"node_modules\\.bin\\real-size.cmd --json "${tree}""`,
+          `"node_modules\\.bin\\real-size-windows.cmd --json "${tree}""`,
         ],
         { cwd: project, encoding: "utf8", windowsVerbatimArguments: true },
       ),
-      "node_modules/.bin/real-size.cmd",
+      "node_modules/.bin/real-size-windows.cmd",
     );
   } else {
     const tools = join(root, "tools");
@@ -116,7 +116,7 @@ try {
       "--package",
       tarball,
       "--",
-      "real-size",
+      windows ? "real-size-windows" : "real-size",
       "--json",
       tree,
     ],

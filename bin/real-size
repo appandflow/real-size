@@ -1,26 +1,25 @@
-#!/usr/bin/env -S REAL_SIZE_LAUNCHER=1\_sh\_\cnode
+#!/bin/sh
 true /*
 self=$0
 while [ -h "$self" ]; do
   link=$(readlink "$self")
   case $link in
     /*) self=$link ;;
-    *) self=$(dirname -- "$self")/$link ;;
+    *) self=${self%/*}/$link ;;
   esac
 done
-case $(uname -s) in
-  Darwin) os=darwin ;;
-  Linux) os=linux ;;
-  *) os= ;;
+dir=${self%/*}
+[ "$dir" = "$self" ] && dir=.
+case $(uname -sm) in
+  "Darwin arm64") target=darwin-arm64 ;;
+  "Darwin x86_64") target=darwin-x64 ;;
+  "Linux x86_64" | "Linux amd64") target=linux-x64 ;;
+  "Linux aarch64" | "Linux arm64") target=linux-arm64 ;;
+  *) target= ;;
 esac
-case $(uname -m) in
-  x86_64 | amd64) arch=x64 ;;
-  arm64 | aarch64) arch=arm64 ;;
-  *) arch= ;;
-esac
-binary=$(dirname -- "$self")/../prebuilds/$os-$arch/real-size
-if [ -z "$os" ] || [ -z "$arch" ] || [ ! -x "$binary" ]; then
-  echo "real-size: no prebuilt binary for $(uname -s) $(uname -m)" >&2
+binary=$dir/../prebuilds/$target/real-size
+if [ -z "$target" ] || [ ! -x "$binary" ]; then
+  echo "real-size: no prebuilt binary for $(uname -sm)" >&2
   exit 2
 fi
 exec "$binary" "$@"
@@ -30,13 +29,8 @@ const { spawnSync } = process.getBuiltinModule("node:child_process");
 const { existsSync, realpathSync } = process.getBuiltinModule("node:fs");
 const { dirname, join } = process.getBuiltinModule("node:path");
 const target = `${process.platform}-${process.arch}`;
-const binary = join(
-  dirname(realpathSync(process.argv[1])),
-  "..",
-  "prebuilds",
-  target,
-  process.platform === "win32" ? "real-size.exe" : "real-size",
-);
+const name = process.platform === "win32" ? "real-size.exe" : "real-size";
+const binary = join(dirname(realpathSync(process.argv[1])), "..", "prebuilds", target, name);
 if (!existsSync(binary)) {
   console.error(`real-size: no prebuilt binary for ${target}`);
   process.exit(2);

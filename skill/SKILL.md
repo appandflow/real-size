@@ -12,6 +12,8 @@ npx real-size <path>...          # one line per path, plus a total
 npx real-size --json <path>...   # one JSON document: { paths: [...], total }
 ```
 
+On Windows in cmd.exe or PowerShell the command is `real-size-windows` (`npx --package real-size real-size-windows <path>`).
+
 Fields:
 
 - `allocated`: bytes the tree's files occupy on disk, each file counted once.

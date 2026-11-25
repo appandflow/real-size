@@ -40,17 +40,31 @@ npm install --global real-size
 Or run it without installing: `npx real-size <path>`.
 
 The package ships prebuilt binaries and has no install scripts and no runtime
-dependencies. On macOS and Linux the `real-size` command npm installs is a small
-`sh` script that starts the binary directly, so it runs without Node; with
-`npx`, `npx` itself is the only Node process involved. On Windows npm's
-generated `real-size.cmd` and `real-size.ps1` start Node, which starts the
+dependencies.
+
+On macOS and Linux the `real-size` command is a `#!/bin/sh` script that finds
+the binary for the machine and `exec`s it, so no Node process is involved and
+it adds a few milliseconds to the binary's start-up. It works when installed
+with npm, pnpm, Yarn classic and Yarn Berry's `node-modules` linker, locally
+or globally, through `npx`, `pnpm dlx` and `yarn dlx`, and with BusyBox `sh`
+on Alpine. `yarn real-size` under Yarn Berry, including Plug'n'Play, runs the
+command through Node; the same file is also a Node script that starts the
 binary.
 
-The command's first line is `#!/usr/bin/env -S`, followed by arguments that
-make `env` start `sh` while npm's Windows shim generator reads `node`. It needs
-an `env` that supports `-S`: macOS, FreeBSD and GNU coreutils 8.30 or later
-have it. BusyBox `env` does not, so on Alpine and other BusyBox systems install
-coreutils (`apk add coreutils`) or call the binary from `binaryPath()`.
+On Windows the command is **`real-size-windows`**, with the same arguments:
+
+```bat
+npm install --global real-size
+real-size-windows node_modules
+npx --package real-size real-size-windows node_modules
+```
+
+npm and pnpm generate Windows launchers from a command's `#!` line, so the
+`real-size` command's `#!/bin/sh` needs an `sh` on Windows (Git Bash has one;
+cmd.exe and PowerShell do not). `real-size-windows` points at the x64 binary,
+which the launchers start directly in cmd.exe, Windows PowerShell and
+PowerShell, without Node; Windows on Arm runs it under emulation. The library
+uses the native arm64 binary.
 
 ## Command line
 
@@ -167,8 +181,7 @@ between `private` and `allocated`.
 | Windows, network shares     |            |            |                                   | Exit status 2                     |
 
 The Linux binaries are statically linked, so they run on glibc and musl
-distributions alike. The installed command needs `env -S` (see
-[Install](#install)).
+distributions alike.
 
 ### macOS
 
@@ -252,13 +265,11 @@ once. Network shares (UNC paths and mapped drives) exit with status 2.
 - On Linux, filesystems other than ext2/3/4, tmpfs, btrfs and XFS exit with
   status 2 even where an answer could be given, for example ZFS without
   block cloning.
-- On BusyBox systems such as Alpine, the installed `real-size` command needs
-  coreutils for `env -S`. The binary and the library work without it.
-- The installed command works with npm and `npx`. pnpm writes its own
-  launcher from the first line, does not understand the `env -S` arguments,
-  and produces a `node_modules/.bin/real-size` that fails on every platform.
-  With pnpm, run `node_modules/real-size/bin/real-size` directly on macOS and
-  Linux, or use the library. Yarn's launchers have not been tested.
+- On Windows the command is `real-size-windows`, not `real-size`, in cmd.exe
+  and PowerShell (see [Install](#install)). Yarn classic's Windows launchers
+  are not guaranteed.
+- On macOS and Linux, `real-size` and `real-size-windows` are both installed;
+  the second is useless there.
 - On Windows, files compressed by the Windows Overlay Filter (`compact
 /exe`) report their main stream's allocation.
 

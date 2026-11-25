@@ -48,9 +48,6 @@ jobs:
           file prebuilds/${{ matrix.target }}/real-size | tee /dev/stderr | grep -q 'statically linked'
           dash -n bin/real-size
           sh -n bin/real-size
-      - name: Launcher on Alpine with coreutils
-        if: matrix.target == 'linux-x64'
-        run: docker run --rm -v "$PWD":/w alpine sh -c 'apk add -q coreutils && /w/bin/real-size --json /w/src'
       - name: btrfs and XFS loopback mounts
         if: runner.os == 'Linux'
         run: |
@@ -144,35 +141,43 @@ jobs:
           path: package
       - name: Install the tarball and run the CLI and the API
         shell: bash
-        run: npm run test:package -- package/real-size-*.tgz
+        run: npm run test:package -- ./package/real-size-*.tgz
+      - run: npm install --global pnpm@latest yarn@1
+      - name: npm, pnpm, Yarn classic and Yarn Berry
+        shell: bash
+        run: |
+          pnpm --version
+          yarn --version
+          status=0
+          for manager in npm pnpm yarn-classic yarn-berry; do
+            node scripts/managers-smoke.mjs "$manager" ./package/real-size-*.tgz || status=1
+          done
+          exit $status
       - name: Installed command start-up time
         if: runner.os != 'Windows'
         run: |
           dir=$(mktemp -d)
           npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund ./package/real-size-*.tgz > /dev/null
           mkdir "$dir/tree" && echo hi > "$dir/tree/file"
+          binary="$dir/node_modules/real-size/prebuilds/$(node -p 'process.platform + "-" + process.arch')/real-size"
           time (for i in $(seq 20); do "$dir/node_modules/.bin/real-size" "$dir/tree" > /dev/null; done)
-      - name: Global install in cmd.exe and PowerShell without sh
-        if: runner.os == 'Windows'
-        shell: pwsh
+          time (for i in $(seq 20); do "$binary" "$dir/tree" > /dev/null; done)
+  alpine:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: package
+      - name: npm, pnpm, Yarn classic and Yarn Berry on Alpine with BusyBox
         run: |
-          $tarball = (Get-Item package\real-size-*.tgz).FullName
-          npm install --global --ignore-scripts $tarball
-          if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
-          $tree = Join-Path $env:RUNNER_TEMP 'tree'
-          New-Item -ItemType Directory -Force $tree | Out-Null
-          Set-Content (Join-Path $tree 'file') 'real-size'
-          $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'sh.exe')) }) -join ';'
-          if (Get-Command sh -ErrorAction SilentlyContinue) { throw 'sh is still on PATH' }
-          function Check($label, $json) {
-            if ($LASTEXITCODE -ne 0) { throw "$label exited with $LASTEXITCODE" }
-            $result = $json | ConvertFrom-Json
-            if ($result.paths[0].files -ne 1) { throw "$label printed $json" }
-            Write-Output "${label}: ok"
-          }
-          Check 'cmd.exe' (cmd /d /c "real-size --json $tree")
-          Check 'Windows PowerShell' (powershell -NoProfile -Command "real-size --json '$tree'; exit `$LASTEXITCODE")
-          Check 'PowerShell' (pwsh -NoProfile -Command "real-size --json '$tree'; exit `$LASTEXITCODE")
-          cmd /d /c "real-size --json $tree\missing"
-          if ($LASTEXITCODE -ne 1) { throw "a missing path exited with $LASTEXITCODE, expected 1" }
-          exit 0
+          docker run --rm -v "$PWD":/w -w /w node:22-alpine sh -c '
+            ls -l /bin/sh /usr/bin/env
+            npm install --global pnpm@latest yarn@1 > /dev/null
+            status=0
+            for manager in npm pnpm yarn-classic yarn-berry; do
+              node scripts/managers-smoke.mjs "$manager" ./package/real-size-*.tgz || status=1
+            done
+            exit $status'
