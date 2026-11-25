@@ -1,0 +1,5 @@
+package-lock.json
+prebuilds/
+build/
+bin/
+src/

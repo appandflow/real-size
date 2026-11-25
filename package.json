@@ -1,0 +1,62 @@
+{
+  "name": "real-size",
+  "version": "0.1.0",
+  "description": "The bytes deleting a folder would actually free, on APFS clones, hard links and reflinks",
+  "type": "module",
+  "engines": {
+    "node": "^20.19.4 || >=22.12.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "bin": {
+    "real-size": "bin/real-size"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "import": "./index.mjs"
+    }
+  },
+  "files": [
+    "bin",
+    "index.mjs",
+    "index.d.mts",
+    "prebuilds",
+    "skill",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "disk-usage",
+    "du",
+    "apfs",
+    "clone",
+    "hard-link",
+    "reflink",
+    "btrfs",
+    "xfs",
+    "refs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appandflow/real-size.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test --test-concurrency=1 test/cli.test.mjs test/api.test.mjs test/launcher.test.mjs test/darwin.test.mjs test/linux.test.mjs test/windows.test.mjs test/package.test.mjs",
+    "test:package": "node scripts/package-smoke.mjs",
+    "pack:release": "node scripts/pack-release.mjs",
+    "typecheck": "tsc",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0"
+  }
+}

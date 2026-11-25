@@ -1,0 +1,173 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: win32-x64
+            msvc: x64
+          - os: windows-11-arm
+            target: win32-arm64
+            msvc: arm64
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run format:check
+      - run: npm run typecheck
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: ${{ matrix.msvc }}
+      - run: npm run build
+      - name: Static binary and POSIX launcher
+        if: runner.os == 'Linux'
+        run: |
+          file prebuilds/${{ matrix.target }}/real-size | tee /dev/stderr | grep -q 'statically linked'
+          dash -n bin/real-size
+          sh -n bin/real-size
+      - name: btrfs and XFS loopback mounts
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
+          for fs in btrfs xfs; do
+            truncate -s 1G "$RUNNER_TEMP/$fs.img"
+          done
+          mkfs.btrfs -q "$RUNNER_TEMP/btrfs.img"
+          mkfs.xfs -q -m reflink=1 "$RUNNER_TEMP/xfs.img"
+          for fs in btrfs xfs; do
+            sudo mkdir -p "/mnt/$fs"
+            sudo mount -o loop "$RUNNER_TEMP/$fs.img" "/mnt/$fs"
+            sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
+          done
+          echo "REAL_SIZE_REFLINK_DIRS=/mnt/btrfs:/mnt/xfs" >> "$GITHUB_ENV"
+      - name: ReFS volume
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $vhd = Join-Path $env:RUNNER_TEMP 'refs.vhdx'
+          $script = Join-Path $env:RUNNER_TEMP 'refs.txt'
+          @(
+            "create vdisk file=`"$vhd`" maximum=4096 type=expandable",
+            "select vdisk file=`"$vhd`"",
+            'attach vdisk',
+            'create partition primary',
+            'format fs=refs quick label=refs',
+            'assign letter=R'
+          ) | Set-Content -Encoding ascii $script
+          diskpart /s $script
+          if ($LASTEXITCODE -ne 0) { throw "diskpart failed with $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force build | Out-Null
+          cl /nologo /W4 /WX test\fixtures\clone-windows.c /Fobuild\ /Febuild\clone.exe
+          if ($LASTEXITCODE -ne 0) { throw "clone tool did not build" }
+          "REAL_SIZE_REFS_DIR=R:\" >> $env:GITHUB_ENV
+          "REAL_SIZE_CLONE_TOOL=$(Resolve-Path build\clone.exe)" >> $env:GITHUB_ENV
+      - run: npm test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-${{ matrix.target }}
+          path: prebuilds/
+  package:
+    needs: platforms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: prebuild-*
+          path: prebuilds
+          merge-multiple: true
+      - run: npm run pack:release
+      - run: tar -tvzf real-size-*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: real-size-*.tgz
+  smoke:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          [
+            ubuntu-latest,
+            ubuntu-24.04-arm,
+            macos-latest,
+            macos-15-intel,
+            windows-latest,
+            windows-11-arm,
+          ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: package
+      - name: Install the tarball and run the CLI and the API
+        shell: bash
+        run: npm run test:package -- package/real-size-*.tgz
+      - name: Installed command start-up time
+        if: runner.os != 'Windows'
+        run: |
+          dir=$(mktemp -d)
+          npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund package/real-size-*.tgz > /dev/null
+          mkdir "$dir/tree" && echo hi > "$dir/tree/file"
+          time (for i in $(seq 20); do "$dir/node_modules/.bin/real-size" "$dir/tree" > /dev/null; done)
+      - name: Global install in cmd.exe and PowerShell without sh
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tarball = (Get-Item package\real-size-*.tgz).FullName
+          npm install --global --ignore-scripts $tarball
+          if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+          $tree = Join-Path $env:RUNNER_TEMP 'tree'
+          New-Item -ItemType Directory -Force $tree | Out-Null
+          Set-Content (Join-Path $tree 'file') 'real-size'
+          $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'sh.exe')) }) -join ';'
+          if (Get-Command sh -ErrorAction SilentlyContinue) { throw 'sh is still on PATH' }
+          function Check($label, $json) {
+            if ($LASTEXITCODE -ne 0) { throw "$label exited with $LASTEXITCODE" }
+            $result = $json | ConvertFrom-Json
+            if ($result.paths[0].files -ne 1) { throw "$label printed $json" }
+            Write-Output "${label}: ok"
+          }
+          Check 'cmd.exe' (cmd /d /c "real-size --json $tree")
+          Check 'Windows PowerShell' (powershell -NoProfile -Command "real-size --json '$tree'; exit `$LASTEXITCODE")
+          Check 'PowerShell' (pwsh -NoProfile -Command "real-size --json '$tree'; exit `$LASTEXITCODE")
+          cmd /d /c "real-size --json $tree\missing"
+          if ($LASTEXITCODE -ne 1) { throw "a missing path exited with $LASTEXITCODE, expected 1" }

@@ -1,0 +1,51 @@
+#!/usr/bin/env -S REAL_SIZE_LAUNCHER=1\_sh\_\cnode
+true /*
+self=$0
+while [ -h "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+case $(uname -s) in
+  Darwin) os=darwin ;;
+  Linux) os=linux ;;
+  *) os= ;;
+esac
+case $(uname -m) in
+  x86_64 | amd64) arch=x64 ;;
+  arm64 | aarch64) arch=arm64 ;;
+  *) arch= ;;
+esac
+binary=$(dirname -- "$self")/../prebuilds/$os-$arch/real-size
+if [ -z "$os" ] || [ -z "$arch" ] || [ ! -x "$binary" ]; then
+  echo "real-size: no prebuilt binary for $(uname -s) $(uname -m)" >&2
+  exit 2
+fi
+exec "$binary" "$@"
+: <<'//'
+*/
+const { spawnSync } = process.getBuiltinModule("node:child_process");
+const { existsSync, realpathSync } = process.getBuiltinModule("node:fs");
+const { dirname, join } = process.getBuiltinModule("node:path");
+const target = `${process.platform}-${process.arch}`;
+const binary = join(
+  dirname(realpathSync(process.argv[1])),
+  "..",
+  "prebuilds",
+  target,
+  process.platform === "win32" ? "real-size.exe" : "real-size",
+);
+if (!existsSync(binary)) {
+  console.error(`real-size: no prebuilt binary for ${target}`);
+  process.exit(2);
+}
+const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit" });
+if (result.error) {
+  console.error(`real-size: ${result.error.message}`);
+  process.exit(2);
+}
+if (result.signal) process.kill(process.pid, result.signal);
+process.exit(result.status ?? 1);
+//
