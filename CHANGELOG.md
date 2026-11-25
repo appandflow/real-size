@@ -18,6 +18,9 @@
   rejecting. It still rejects when a path itself cannot be read.
 - On a terminal, a walk that takes more than two seconds shows a progress
   line on stderr. `--no-progress` turns it off.
+- On Linux, entries that the directory listing reports as symbolic links,
+  sockets, FIFOs or devices are skipped without an `fstatat` call. Results do
+  not change. A tree of 30,000 symbolic links walks about four times faster.
 
 ## 0.1.0
 

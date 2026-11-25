@@ -129,6 +129,7 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
     }
     const char *name = entry->d_name;
     if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
+    if (entry->d_type != DT_UNKNOWN && entry->d_type != DT_DIR && entry->d_type != DT_REG) continue;
     size_t name_length = strlen(name);
     size_t child_length = length + name_length + 1;
     if (child_length < sizeof relative) {
