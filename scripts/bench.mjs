@@ -8,6 +8,7 @@ import {
   closeSync,
   writeSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { cpus, tmpdir, totalmem } from "node:os";
@@ -23,6 +24,7 @@ const { values, positionals } = parseArgs({
     generate: { type: "string" },
     cold: { type: "boolean", default: false },
     binary: { type: "string" },
+    variant: { type: "string", multiple: true, default: [] },
     keep: { type: "boolean", default: false },
   },
 });
@@ -73,6 +75,26 @@ function generate(root) {
     closeSync(fd);
   }
   trees.push({ name: "large files (4 x 256 MB)", path: large });
+  const wide = join(root, "wide");
+  mkdirSync(wide);
+  for (let i = 0; i < 100000; i++)
+    writeFileSync(join(wide, `file-${i}`), `${i}\n`);
+  trees.push({
+    name: "wide directory (100,000 files in one directory)",
+    path: wide,
+  });
+  const links = join(root, "symlinks");
+  for (let d = 0; d < 300; d++) {
+    const dir = join(links, `package-${d}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "index.js"), `${d}\n`);
+    for (let l = 0; l < 100; l++)
+      symlinkSync(
+        windows ? join(dir, "index.js") : "index.js",
+        join(dir, `link-${l}`),
+      );
+  }
+  trees.push({ name: "symbolic links (30,000 links, 300 files)", path: links });
   return trees;
 }
 
@@ -191,6 +213,10 @@ for (const tree of trees) {
   };
   const tools = [
     ours,
+    ...values.variant.map((variant) => {
+      const [label, path] = variant.split("=");
+      return { ...ours, name: `real-size (${label})`, command: resolve(path) };
+    }),
     ...(windows
       ? [
           {
