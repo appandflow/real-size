@@ -5,35 +5,48 @@ arm64), assembles them into the npm tarball with `npm run pack:release`, and
 uploads it as the `npm-package` artifact of every run. The smoke jobs install
 that tarball on every platform and run the CLI and the API.
 
-## First publish (manual)
+## First publish (done)
 
-npm trusted publishing cannot create a package, so the first version is
-published by hand from the CI artifact of the commit being released:
+0.1.0 was published by hand from the `npm-package` artifact of CI run
+45666109276 (commit `ba0d021`), because npm trusted publishing cannot create a
+package. npm staged that first publish: for about a minute the registry showed
+a stub version `0.0.0-stage` before 0.1.0 appeared, and the stub stays listed
+in the package's versions.
+
+The repository has no `v0.1.0` tag: the release workflow at `ba0d021` cannot
+skip a version that already exists, so a tag there would run a failing
+publish. Commit `ba0d021` is the 0.1.0 source.
+
+The trusted publisher is configured on npmjs.com (package Settings, Trusted
+Publisher), so the next version is the first tag-driven release:
+
+| Field                | Value          |
+| -------------------- | -------------- |
+| Publisher            | GitHub Actions |
+| Organization or user | `appandflow`   |
+| Repository           | `real-size`    |
+| Workflow filename    | `release.yml`  |
+| Environment name     | (empty)        |
+
+To publish by hand again, from the CI artifact of the commit being released:
 
 ```sh
 gh run download <run-id> --repo appandflow/real-size --name npm-package --dir release
 npm login
-npm publish ./release/real-size-0.1.0.tgz --access public
+npm publish ./release/real-size-<version>.tgz --access public
 ```
 
 The `./` matters: without it npm reads `release/...` as a GitHub repository.
-`<run-id>` is the green CI run of the commit on `main` (see
-`gh run list --repo appandflow/real-size --branch main --workflow CI`). Publish
-the tarball CI built; do not run `npm publish` from a checkout, because a local
-checkout holds only the binary for the machine it was built on.
+Publish the tarball CI built; a local checkout holds only the binary for the
+machine it was built on.
 
-Then configure the trusted publisher on npmjs.com, in the package's settings:
-GitHub Actions, organization `appandflow`, repository `real-size`, workflow
-`release.yml`, no environment.
-
-## Later releases
-
-`.github/workflows/release.yml` works only after the first manual publish
-created the package and the trusted publisher above is configured.
+## Tag-driven releases
 
 1. Bump `version` in `package.json` and merge it to `main`.
 2. Tag the merge commit `v<version>` and push the tag.
 
-The workflow runs CI on the tag, checks that the tag matches the package
-version, and publishes the CI-built tarball with provenance through npm
-trusted publishing. It needs no npm token.
+The workflow checks that the tag matches the package version and that the
+version is not on npm yet; when it already is, as 0.1.0 is, it stops there
+with a notice and succeeds. Otherwise it runs CI on the tag and publishes the
+CI-built tarball with provenance through npm trusted publishing. It needs no
+npm token.

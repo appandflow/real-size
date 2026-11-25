@@ -7,6 +7,7 @@ const result: RealSizeResult = await realSize(["."], {
 });
 const reclaimable: number = result.paths[0]!.private;
 const exact: boolean = result.total.exact;
+const skipped: number = result.total.skipped;
 const binary: string | null = binaryPath();
 try {
   await realSize("/");
@@ -18,4 +19,5 @@ try {
 }
 void reclaimable;
 void exact;
+void skipped;
 void binary;

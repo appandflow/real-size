@@ -21,6 +21,7 @@ if (process.platform === "darwin") {
     `-DREAL_SIZE_TARGET=${target}`,
     "src/main.c",
     "src/darwin.c",
+    "src/posix.c",
     "-o",
     `${directory}/real-size`,
   ]);
@@ -33,6 +34,7 @@ if (process.platform === "darwin") {
     `-DREAL_SIZE_TARGET=${target}`,
     "src/main.c",
     "src/linux.c",
+    "src/posix.c",
     "-o",
     `${directory}/real-size`,
   ]);

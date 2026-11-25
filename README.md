@@ -71,7 +71,7 @@ prints the version and the binary's platform, for example `0.1.0
 ## Command line
 
 ```text
-real-size [--json] <path>...
+real-size [--json] [--no-progress] <path>...
 ```
 
 Each path is measured on its own. Plain output prints one line per path, and a
@@ -97,23 +97,54 @@ that is not exact.
       "allocated": 4767227904,
       "private": 90292224,
       "files": 168433,
-      "exact": false
+      "exact": false,
+      "skipped": 0
     }
   ],
   "total": {
     "allocated": 4767227904,
     "private": 90292224,
     "files": 168433,
-    "exact": false
+    "exact": false,
+    "skipped": 0
   }
 }
 ```
 
-| Exit status | Meaning                                                                               |
-| ----------- | ------------------------------------------------------------------------------------- |
-| 0           | Every path was measured.                                                              |
-| 1           | A usage error, or a path could not be read. The reason is on stderr, stdout is empty. |
-| 2           | The filesystem cannot report what deleting a path would free. Stdout is empty.        |
+### Errors and exit status
+
+An entry below a path that cannot be read, such as a directory without read
+permission, is skipped and the walk goes on. Each one is named on stderr with
+its own path, relative to the path as given, and the reason, up to ten lines;
+the rest are counted in a last line:
+
+```console
+$ real-size ~/Library
+real-size: /Users/me/Library/Mail: Operation not permitted
+real-size: and 3 more entries could not be read
+/Users/me/Library: at least 2.1 GB private, 9.8 GB allocated, 210377 files (4 entries could not be read)
+```
+
+The sizes are then lower bounds: `skipped` counts the entries left out and
+`exact` is `false`. Like `du`, the command prints the result and exits with
+status 1. An entry deleted while the walk runs is not an error: it frees
+nothing, so it is left out without a message and does not count in `skipped`.
+
+| Exit status | Meaning                                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0           | Every path was measured in full.                                                                                                                                                |
+| 1           | Some entries could not be read: the result is on stdout with `skipped` above 0. Or a usage error, or a path itself could not be read: the reason is on stderr, stdout is empty. |
+| 2           | The filesystem cannot report what deleting a path would free. Stdout is empty.                                                                                                  |
+
+With exit status 1, a result on stdout tells the two cases apart.
+
+### Progress
+
+When stderr is a terminal and a walk has run for more than two seconds,
+`real-size` shows one status line on stderr with the files counted so far and
+the directory it is in, and clears it before printing the result. It shows
+nothing when stderr is not a terminal, so pipes, scripts and the library never
+see it. `--no-progress` turns it off.
 
 `--version` prints the version and `--help` prints usage.
 
@@ -136,8 +167,12 @@ the promise rejects at once. It rejects with a `RealSizeError` whose `code` is:
 
 - `unsupported`: no prebuilt binary for this platform, or exit status 2.
 - `timeout`: `timeoutMs` ran out.
-- `failed`: exit status 1 or the binary could not start. `message` holds the
-  binary's error.
+- `failed`: exit status 1 without a result (a path that cannot be read) or the
+  binary could not start. `message` holds the binary's error.
+
+When some entries below a path could not be read, the promise resolves with
+the result and `total.skipped` above 0, rather than rejecting. Version 0.1.0
+rejected the whole measurement instead.
 
 An aborted `signal` rejects with the signal's reason.
 
@@ -155,6 +190,8 @@ TypeScript types are included. Node `^20.19.4 || >=22.12.0`.
 - `files`: the regular files counted, each hard-linked file once.
 - `exact`: `true` when `private` is the exact answer, `false` when it is a
   lower bound.
+- `skipped`: entries that could not be read and were left out. Above 0, every
+  size is a lower bound and `exact` is `false`. Added in 0.1.1.
 
 Directories, symbolic links and metadata are not counted. Symbolic links are
 never followed, and neither are Windows junctions.
@@ -279,10 +316,8 @@ on APFS, the extent map on btrfs and XFS, and the link count on Windows.
 - Each path is measured on its own and the total is their sum. Two paths that
   hard-link or clone each other's files each report those bytes as shared, so
   the total can be lower than what deleting both would free.
-- The macOS and Linux walks stop at 256 nested directories and the Windows
-  walk at 256 as well; deeper trees exit with status 1.
-- A path that cannot be read, such as a directory without read permission,
-  exits with status 1 rather than reporting a partial size.
+- The walks stop at 256 nested directories; a deeper directory is skipped and
+  counted in `skipped`.
 - Files changed during the walk may be counted in either state.
 - The plain output's sizes are rounded; use `--json` for bytes.
 - On Linux, filesystems other than ext2/3/4, tmpfs, btrfs and XFS exit with
