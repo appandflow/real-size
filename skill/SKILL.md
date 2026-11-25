@@ -19,9 +19,14 @@ Fields:
 - `allocated`: bytes the tree's files occupy on disk, each file counted once.
 - `private`: bytes deleting the tree would free. Report this one as reclaimable.
 - `files`: regular files counted.
-- `exact`: `false` means `private` is a lower bound: some file shares blocks with another file, possibly one inside the same tree, so deleting the whole tree may free more. Say "at least".
+- `exact`: `false` means `private` is a lower bound: some file shares blocks with another file, possibly one inside the same tree, or some entries could not be read. Deleting the whole tree may free more. Say "at least".
+- `skipped`: entries that could not be read (no permission, an I/O error, nesting deeper than 256 directories) and were left out of every number.
 
-Exit status 2 means the filesystem cannot report this (for example NFS, overlayfs, a network share, or a non-APFS volume on macOS). Then say real-size cannot tell on this filesystem, fall back to `du -sh`, and present that number as an upper bound. Exit status 1 is a usage or I/O error, with the reason on stderr.
+Exit status 1 with a result on stdout means some entries were skipped: stderr names each one with its reason (the first ten, then a count). Still use the result: report `private` as "at least", give the number of entries that could not be read and the paths stderr names, and suggest rerunning with the needed permissions if the user wants the full figure. Exit status 1 with nothing on stdout is a usage error or a path that cannot be read at all, with the reason on stderr.
+
+Exit status 2 means the filesystem cannot report this (for example NFS, overlayfs, a network share, or a non-APFS volume on macOS). Then say real-size cannot tell on this filesystem, fall back to `du -sh`, and present that number as an upper bound.
+
+Entries deleted while the walk runs are left out without a message; they free nothing.
 
 Example, a pnpm worktree's `node_modules` on macOS:
 

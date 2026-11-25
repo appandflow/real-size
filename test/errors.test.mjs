@@ -50,7 +50,10 @@ test("a directory deleted during the walk is skipped without a message", async (
     }
   });
   const status = await new Promise((resolve) => child.on("close", resolve));
-  assert.equal(stderr, `real-size: test pause at tree${sep}gone\n`);
+  assert.equal(
+    stderr.replace(/\r\n/g, "\n"),
+    `real-size: test pause at tree${sep}gone\n`,
+  );
   assert.equal(status, 0);
   const result = JSON.parse(stdout).paths[0];
   assert.equal(result.files, 2);
@@ -71,7 +74,7 @@ test(
         assert.equal(json.status, 1, json.stderr);
         assert.match(
           json.stderr,
-          new RegExp(`^real-size: tree\\${sep}locked: .+\\n$`),
+          new RegExp(`^real-size: tree\\${sep}locked: .+\\r?\\n$`),
         );
         const result = JSON.parse(json.stdout);
         assert.deepEqual(
@@ -151,7 +154,7 @@ test(
       const run = cli(["--json", "tree"], { cwd: dir });
       assert.equal(run.status, 1);
       assert.equal(run.stdout, "");
-      assert.match(run.stderr, /^real-size: tree: .+\n$/);
+      assert.match(run.stderr, /^real-size: tree: .+\r?\n$/);
     });
   },
 );
@@ -166,7 +169,7 @@ test("directories nested past the depth limit are skipped and named", (t) => {
   assert.match(
     run.stderr,
     new RegExp(
-      `^real-size: tree(\\${sep}d){256}: more than 256 nested directories\\n$`,
+      `^real-size: tree(\\${sep}d){256}: more than 256 nested directories\\r?\\n$`,
     ),
   );
   const result = JSON.parse(run.stdout).paths[0];
@@ -205,7 +208,11 @@ print(json.dumps({"status": child.wait(), "stdout": stdout.decode(), "stderr": s
 
 test(
   "progress shows on a terminal only, fits its width, and is cleared",
-  { skip: !python && "needs python3 for a pseudo-terminal" },
+  {
+    skip: windows
+      ? "no pseudo-terminal helper on Windows"
+      : !python && "needs python3 for a pseudo-terminal",
+  },
   (t) => {
     const dir = scratch(t);
     const long = join(dir, "x".repeat(80));
