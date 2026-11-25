@@ -50,8 +50,8 @@ static int reports_private_size(int fd) {
 }
 
 /* getattrlistbulk lists a mount point with the device of the directory it covers, so a volume mounted inside the tree
- * shows as a change of device in its own listing, before anything in it is counted. Symbolic links are listed, not
- * followed. */
+ * shows as a change of device in its own listing, before anything in it is counted. A volume whose root lists nothing
+ * is therefore not reported as skipped; it holds nothing to count. Symbolic links are listed, not followed. */
 static int walk(int dirfd, dev_t parent, struct totals *totals, char *buffer, int depth) {
   if (progress_due()) progress_show(totals, entry_path(depth, NULL));
   struct attrlist request = {0};

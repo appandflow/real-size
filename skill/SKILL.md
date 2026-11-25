@@ -24,7 +24,7 @@ Fields:
 
 Exit status 1 with a result on stdout means some entries were skipped: stderr names each one with its reason (the first ten, then a count). Still use the result: report `private` as "at least", give the number of entries that could not be read and the paths stderr names, and suggest rerunning with the needed permissions if the user wants the full figure. Exit status 1 with nothing on stdout is a usage error or a path that cannot be read at all, with the reason on stderr.
 
-Exit status 2 means the filesystem the path is on cannot report this (for example NFS, overlayfs, a network share, or a non-APFS volume on macOS). A volume like that mounted inside the folder does not cause exit 2: it is one of the skipped entries, named on stderr as "another filesystem that cannot report private size", and nothing in it is counted. Then say real-size cannot tell on this filesystem, fall back to `du -sh`, and present that number as an upper bound.
+Exit status 2 means the filesystem the path is on cannot report this (for example NFS, overlayfs, a network share, or a non-APFS volume on macOS). Then say real-size cannot tell on this filesystem, fall back to `du -sh`, and present that number as an upper bound. A volume like that mounted inside the folder does not cause exit 2: it is one of the skipped entries of exit status 1, named on stderr as "another filesystem that cannot report private size", and nothing in it is counted.
 
 Entries deleted while the walk runs are left out without a message; they free nothing.
 
