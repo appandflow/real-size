@@ -251,6 +251,27 @@ chunk store that only a garbage collection job reclaims; those files report
 their own allocation, so `private` overstates what deleting them frees at
 once. Network shares (UNC paths and mapped drives) exit with status 2.
 
+## Speed
+
+Warm-cache wall time of the bare binary against `du -sk` (macOS, Linux) or
+`robocopy /L` (Windows), 10 runs each. Method, cold-cache runs and every
+runner are in [docs/benchmarks.md](docs/benchmarks.md).
+
+| Machine                        | Filesystem | Tree                                  | real-size | Baseline | Ratio |
+| ------------------------------ | ---------- | ------------------------------------- | --------- | -------- | ----- |
+| Apple M4 Pro, 14 cores         | APFS       | pnpm `node_modules`, 168,433 files    | 1.01 s    | 876.4 ms | 1.15x |
+| Apple M4 Pro                   | APFS       | 30,000 files hard-linked from a store | 184.4 ms  | 123.8 ms | 1.49x |
+| Apple M4 Pro                   | APFS       | 117,186 small files, 7 levels         | 754.7 ms  | 551.9 ms | 1.37x |
+| GitHub ubuntu-latest, 4 cores  | ext4       | 30,000 hard-linked files              | 91.4 ms   | 123.8 ms | 0.74x |
+| GitHub ubuntu-latest           | ext4       | 117,186 small files                   | 352.0 ms  | 594.5 ms | 0.59x |
+| GitHub ubuntu-latest           | btrfs      | 117,186 small files                   | 1.47 s    | 619.8 ms | 2.37x |
+| GitHub ubuntu-latest           | XFS        | 117,186 small files                   | 747.1 ms  | 521.4 ms | 1.43x |
+| GitHub windows-latest, 4 cores | NTFS       | 30,000 hard-linked files              | 337.8 ms  | 135.1 ms | 2.50x |
+| GitHub windows-latest          | NTFS       | 117,186 small files                   | 1.66 s    | 690.4 ms | 2.40x |
+
+The extra time is the per-file question `du` does not ask: the private size
+on APFS, the extent map on btrfs and XFS, and the link count on Windows.
+
 ## Limitations
 
 - Each path is measured on its own and the total is their sum. Two paths that
