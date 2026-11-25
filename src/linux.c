@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <stdlib.h>
 #include <linux/fiemap.h>
 #include <linux/fs.h>
 #include <string.h>
@@ -16,14 +15,7 @@
 
 #include "real-size.h"
 
-enum volume { LINK_COUNTED, IN_MEMORY, EXTENT_MAPPED };
-
-#ifndef RS_SORT_THRESHOLD
-#define RS_SORT_THRESHOLD 10000
-#endif
-#ifndef RS_TYPE_SKIP
-#define RS_TYPE_SKIP 1
-#endif
+enum volume { LINK_COUNTED, EXTENT_MAPPED };
 
 /* statfs(2) f_type magic numbers from linux/magic.h. On ext2/3/4 and tmpfs files share blocks only through hard links.
  * Btrfs and XFS can share extents between files that have one link each (reflinks), which FIEMAP reports. */
@@ -32,10 +24,8 @@ static int classify(int fd, enum volume *volume) {
   if (fstatfs(fd, &info) < 0) return -1;
   switch ((uint32_t)info.f_type) {
   case 0xef53u:
-    *volume = LINK_COUNTED;
-    return 0;
   case 0x01021994u:
-    *volume = IN_MEMORY;
+    *volume = LINK_COUNTED;
     return 0;
   case 0x9123683eu:
   case 0x58465342u:
@@ -93,68 +83,6 @@ static uint64_t private_bytes(int dirfd, const char *name, uint64_t allocated, i
  * tree; until then it is known by its path relative to the measured directory. */
 static char relative[PATH_MAX];
 
-static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals, int depth, size_t length);
-
-struct entry {
-  ino_t ino;
-  size_t name;
-};
-
-static int by_inode(const void *a, const void *b) {
-  ino_t x = ((const struct entry *)a)->ino, y = ((const struct entry *)b)->ino;
-  return x < y ? -1 : x > y;
-}
-
-static int visit(int dirfd, const char *name, dev_t dev, enum volume volume, struct totals *totals, int depth,
-                 size_t length) {
-  size_t name_length = strlen(name);
-  size_t child_length = length + name_length + 1;
-  if (child_length < sizeof relative) {
-    relative[length] = '/';
-    memcpy(relative + length + 1, name, name_length + 1);
-  }
-  struct stat info;
-  if (fstatat(dirfd, name, &info, AT_SYMLINK_NOFOLLOW) < 0) return errno == ENOENT ? 0 : -1;
-  if (S_ISDIR(info.st_mode)) {
-    if (depth + 1 >= MAX_DEPTH) {
-      errno = ELOOP;
-      return -1;
-    }
-    int child = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (child < 0) return errno == ENOENT ? 0 : -1;
-    enum volume child_volume = volume;
-    if (info.st_dev != dev) {
-      int classified = classify(child, &child_volume);
-      if (classified < 0) {
-        int saved = errno;
-        close(child);
-        errno = saved;
-        return classified;
-      }
-    }
-    return walk(child, info.st_dev, child_volume, totals, depth + 1, child_length);
-  }
-  if (!S_ISREG(info.st_mode)) return 0;
-  uint64_t allocated = (uint64_t)info.st_blocks * 512;
-  uint64_t private_size = allocated;
-  int shared = 0;
-  int defer = volume == EXTENT_MAPPED && allocated > 0 && info.st_nlink > 1 && child_length < sizeof relative;
-  if (volume == EXTENT_MAPPED && allocated > 0 && !defer) private_size = private_bytes(dirfd, name, allocated, &shared);
-  struct inode *linked = add_file(totals, (uint64_t)info.st_dev, (uint64_t)info.st_ino, 0, (uint32_t)info.st_nlink,
-                                  allocated, private_size, shared);
-  if (linked && defer) {
-    linked->deferred = strdup(relative + 1);
-    if (!linked->deferred) {
-      errno = ENOMEM;
-      return -1;
-    }
-  }
-  return 0;
-}
-
-/* Like GNU du through gnulib fts (lib/fts.c, fts_build and dirent_inode_sort_may_be_useful), a directory with at
- * least RS_SORT_THRESHOLD entries is read in full and its entries are stat'ed in inode order, which on ext4 reads the
- * inode table in order on a cold cache; tmpfs gains nothing from it. */
 static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals, int depth, size_t length) {
   DIR *dir = fdopendir(dirfd);
   if (!dir) {
@@ -163,9 +91,6 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
     errno = saved;
     return -1;
   }
-  struct entry *entries = NULL;
-  char *names = NULL;
-  size_t count = 0, entry_capacity = 0, names_length = 0, names_capacity = 0;
   int result = 0;
   for (;;) {
     errno = 0;
@@ -176,40 +101,63 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
     }
     const char *name = entry->d_name;
     if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
-#if RS_TYPE_SKIP
     if (entry->d_type != DT_UNKNOWN && entry->d_type != DT_DIR && entry->d_type != DT_REG) continue;
-#endif
-    size_t size = strlen(name) + 1;
-    if (count == entry_capacity) {
-      entry_capacity = entry_capacity ? entry_capacity * 2 : 64;
-      struct entry *grown = realloc(entries, entry_capacity * sizeof *entries);
-      if (!grown) {
-        errno = ENOMEM;
+    size_t name_length = strlen(name);
+    size_t child_length = length + name_length + 1;
+    if (child_length < sizeof relative) {
+      relative[length] = '/';
+      memcpy(relative + length + 1, name, name_length + 1);
+    }
+    struct stat info;
+    if (fstatat(dirfd, name, &info, AT_SYMLINK_NOFOLLOW) < 0) {
+      if (errno == ENOENT) continue;
+      result = -1;
+      break;
+    }
+    if (S_ISDIR(info.st_mode)) {
+      if (depth + 1 >= MAX_DEPTH) {
+        errno = ELOOP;
         result = -1;
         break;
       }
-      entries = grown;
-    }
-    if (names_length + size > names_capacity) {
-      names_capacity = (names_length + size) * 2;
-      char *grown = realloc(names, names_capacity);
-      if (!grown) {
-        errno = ENOMEM;
+      int child = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      if (child < 0) {
+        if (errno == ENOENT) continue;
         result = -1;
         break;
       }
-      names = grown;
+      enum volume child_volume = volume;
+      if (info.st_dev != dev) {
+        result = classify(child, &child_volume);
+        if (result < 0) {
+          int saved = errno;
+          close(child);
+          errno = saved;
+          break;
+        }
+      }
+      result = walk(child, info.st_dev, child_volume, totals, depth + 1, child_length);
+      if (result < 0) break;
+    } else if (S_ISREG(info.st_mode)) {
+      uint64_t allocated = (uint64_t)info.st_blocks * 512;
+      uint64_t private_size = allocated;
+      int shared = 0;
+      int defer = volume == EXTENT_MAPPED && allocated > 0 && info.st_nlink > 1 && child_length < sizeof relative;
+      if (volume == EXTENT_MAPPED && allocated > 0 && !defer)
+        private_size = private_bytes(dirfd, name, allocated, &shared);
+      struct inode *linked = add_file(totals, (uint64_t)info.st_dev, (uint64_t)info.st_ino, 0,
+                                      (uint32_t)info.st_nlink, allocated, private_size, shared);
+      if (linked && defer) {
+        linked->deferred = strdup(relative + 1);
+        if (!linked->deferred) {
+          errno = ENOMEM;
+          result = -1;
+          break;
+        }
+      }
     }
-    memcpy(names + names_length, name, size);
-    entries[count++] = (struct entry){entry->d_ino, names_length};
-    names_length += size;
   }
-  if (result == 0 && count >= RS_SORT_THRESHOLD && volume != IN_MEMORY) qsort(entries, count, sizeof *entries, by_inode);
-  for (size_t i = 0; result == 0 && i < count; i++)
-    result = visit(dirfd, names + entries[i].name, dev, volume, totals, depth, length);
   int saved = errno;
-  free(entries);
-  free(names);
   closedir(dir);
   errno = saved;
   return result;

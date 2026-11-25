@@ -120,21 +120,9 @@ jobs:
         with:
           arch: ${{ matrix.msvc }}
       - run: npm run build
-      - name: Linux walk variants
-        if: runner.os == 'Linux'
-        run: |
-          git fetch -q --depth=1 origin main
-          mkdir -p "$RUNNER_TEMP/main-src"
-          for f in main.c linux.c real-size.h; do git show "origin/main:src/$f" > "$RUNNER_TEMP/main-src/$f"; done
-          flags="-std=c11 -O2 -Wall -Wextra -Werror -static -s -DREAL_SIZE_VERSION=0.1.0"
-          cc $flags "$RUNNER_TEMP/main-src/main.c" "$RUNNER_TEMP/main-src/linux.c" -o "$RUNNER_TEMP/rs-main"
-          cc $flags -DRS_TYPE_SKIP=0 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-sort-only"
-          cc $flags -DRS_SORT_THRESHOLD=1000000000 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-skip-only"
-          cc $flags -DRS_SORT_THRESHOLD=1 src/main.c src/linux.c -o "$RUNNER_TEMP/rs-sort-all"
-          echo "VARIANTS=--variant main=$RUNNER_TEMP/rs-main --variant sort-only=$RUNNER_TEMP/rs-sort-only --variant skip-only=$RUNNER_TEMP/rs-skip-only --variant sort-every-directory=$RUNNER_TEMP/rs-sort-all" >> "$GITHUB_ENV"
       - name: Benchmark on the runner's disk
         shell: bash
-        run: node scripts/bench.mjs --cold $VARIANTS --generate "$RUNNER_TEMP/bench"
+        run: node scripts/bench.mjs --cold --generate "$RUNNER_TEMP/bench"
       - name: Benchmark on btrfs and XFS
         if: runner.os == 'Linux'
         run: |
@@ -147,7 +135,7 @@ jobs:
             sudo mount -o loop "$RUNNER_TEMP/$fs.img" "/mnt/$fs"
             sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
             echo "### $fs"
-            node scripts/bench.mjs --cold $VARIANTS --generate "/mnt/$fs/bench"
+            node scripts/bench.mjs --cold --generate "/mnt/$fs/bench"
           done
   package:
     needs: platforms
