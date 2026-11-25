@@ -84,7 +84,7 @@ test("plain output prints one line per path and a total", (t) => {
   mkdirSync(join(root, "b"));
   const run = cli([join(root, "a"), join(root, "b")]);
   assert.equal(run.status, 0, run.stderr);
-  const lines = run.stdout.trim().split("\n");
+  const lines = run.stdout.trim().split(/\r?\n/);
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^.+: 1\.\d MB private, 1\.\d MB allocated, 1 files$/);
   assert.match(lines[1], /: 0 B private, 0 B allocated, 0 files$/);

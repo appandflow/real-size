@@ -31,7 +31,8 @@ test(
       "README.md",
     ])
       assert.ok(files.has(file), `missing ${file}`);
-    assert.equal(files.get("bin/real-size") & 0o111, 0o111);
+    if (process.platform !== "win32")
+      assert.equal(files.get("bin/real-size") & 0o111, 0o111);
   },
 );
 
