@@ -132,7 +132,7 @@ jobs:
           sudo sysctl vm.mmap_rnd_bits=28
           version=$(node -p 'require("./package.json").version')
           mkdir -p prebuilds/linux-x64
-          clang -std=c11 -O1 -g -fsanitize=thread -Wall -Wextra -Werror -pthread \
+          clang -std=c11 -O1 -g -fsanitize=thread -Wall -Wextra -Werror -Wno-gnu-variable-sized-type-not-at-end -pthread \
             -DREAL_SIZE_VERSION=$version -DREAL_SIZE_TARGET=linux-x64 \
             src/main.c src/linux.c src/pool.c src/posix.c -o prebuilds/linux-x64/real-size
       - name: npm test on 8 threads
