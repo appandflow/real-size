@@ -175,7 +175,7 @@ struct stat_basic {
 typedef BOOL(WINAPI *stat_by_name_function)(PCWSTR, int, PVOID, ULONG);
 static stat_by_name_function stat_by_name;
 
-static void add_entry_by_name(struct worker *worker, size_t length, const wchar_t *name) {
+static int add_entry_by_name(struct worker *worker, size_t length, const wchar_t *name) {
   struct stat_basic info;
   BOOL found = stat_by_name(worker->path, 3, &info, sizeof info);
   DWORD error = found ? 0 : GetLastError();
@@ -183,20 +183,19 @@ static void add_entry_by_name(struct worker *worker, size_t length, const wchar_
   worker->path[length] = 0;
   if (!found) {
     if (!gone) skip(worker, length, name, error, NULL);
-    return;
+    return 0;
   }
   uint64_t ino, ino_high, allocated = (uint64_t)info.allocation_size.QuadPart;
   memcpy(&ino, info.file_id_128, sizeof ino);
   memcpy(&ino_high, info.file_id_128 + 8, sizeof ino_high);
-  count_file(&worker->totals, (uint64_t)info.volume_serial_number.QuadPart, ino, ino_high, info.number_of_links,
-             allocated, allocated, 0, NULL);
+  return count_file(&worker->totals, (uint64_t)info.volume_serial_number.QuadPart, ino, ino_high, info.number_of_links,
+                    allocated, allocated, 0, NULL);
 }
 
-static void add_entry(struct worker *worker, size_t length, const wchar_t *name, DWORD attributes) {
+static int add_entry(struct worker *worker, size_t length, const wchar_t *name, DWORD attributes) {
   if (stat_by_name && !refcounted &&
       !(attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE))) {
-    add_entry_by_name(worker, length, name);
-    return;
+    return add_entry_by_name(worker, length, name);
   }
   HANDLE file = CreateFileW(worker->path, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                             NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
@@ -204,7 +203,7 @@ static void add_entry(struct worker *worker, size_t length, const wchar_t *name,
   if (file == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
     if (!vanished(error)) skip(worker, length, name, error, NULL);
-    return;
+    return 0;
   }
   BY_HANDLE_FILE_INFORMATION info;
   FILE_STANDARD_INFO standard;
@@ -214,7 +213,7 @@ static void add_entry(struct worker *worker, size_t length, const wchar_t *name,
     int gone = vanished(error);
     CloseHandle(file);
     if (!gone) skip(worker, length, name, error, NULL);
-    return;
+    return 0;
   }
   uint64_t ino = ((uint64_t)info.nFileIndexHigh << 32) | info.nFileIndexLow, ino_high = 0;
   uint64_t volume = info.dwVolumeSerialNumber;
@@ -236,7 +235,7 @@ static void add_entry(struct worker *worker, size_t length, const wchar_t *name,
       !(attributes & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE)))
     private_size = private_bytes(file, allocated, &shared);
   CloseHandle(file);
-  count_file(&worker->totals, volume, ino, ino_high, info.nNumberOfLinks, allocated, private_size, shared, NULL);
+  return count_file(&worker->totals, volume, ino, ino_high, info.nNumberOfLinks, allocated, private_size, shared, NULL);
 }
 
 /* Reparse points whose tag is a name surrogate (symbolic links, junctions, volume mount points) name another file
@@ -274,8 +273,7 @@ static int walk(struct worker *worker, size_t length, int depth) {
     }
     if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
       memcpy(path + length, name, (name_length + 1) * sizeof *name);
-      add_entry(worker, length, name, attributes);
-      files++;
+      files += (uint64_t)add_entry(worker, length, name, attributes);
     } else if (depth + 1 >= MAX_DEPTH)
       skip(worker, length, name, 0, "more than " MAX_DEPTH_TEXT " nested directories");
     else {
