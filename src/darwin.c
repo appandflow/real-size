@@ -39,7 +39,8 @@ static struct item *queue;
 static size_t queued, queue_capacity, busy;
 static int stop_result;
 static struct totals *linked_totals;
-static size_t root_expansion;
+static char resolved_root[PATH_MAX];
+static size_t root_length, resolved_root_length;
 static atomic_uint_fast64_t files_seen;
 
 static void out_of_memory(void) {
@@ -103,9 +104,9 @@ static int reports_private_size(int fd) {
 /* getattrlistbulk lists a mount point with the device of the directory it covers, so a volume mounted inside the tree
  * shows as a change of device in its own listing, before anything in it is counted. A volume whose root lists nothing
  * is therefore not reported as skipped; it holds nothing to count. Symbolic links are listed, not followed.
- * Subdirectories are queued by path; one whose path does not fit in PATH_MAX once symbolic links in the measured path
- * are expanded, which open(2) rejects, is walked here from `dirfd` instead, one thread at a time so the descriptors
- * held stay within one chain of MAX_DEPTH. */
+ * Subdirectories are queued by path and opened below the F_GETPATH path of the measured root, which holds no symbolic
+ * links to expand; one whose path would not fit in PATH_MAX, which open(2) rejects, is walked here from `dirfd`
+ * instead, one thread at a time so the descriptors held stay within one chain of MAX_DEPTH. */
 static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals, char *buffer, int depth) {
   show_progress(path);
   struct attrlist request = {0};
@@ -178,7 +179,8 @@ static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals
         if (depth + 1 >= MAX_DEPTH) {
           skip(totals, path, name, ELOOP, "more than " MAX_DEPTH_TEXT " nested directories");
           free(child_path);
-        } else if (strlen(child_path) + root_expansion < PATH_MAX) push(child_path, dev, depth + 1);
+        } else if (resolved_root_length > 0 && resolved_root_length + 1 + strlen(child_path) - root_length < PATH_MAX)
+          push(child_path, dev, depth + 1);
         else {
           int walked = 0;
           pthread_mutex_lock(&long_path_lock);
@@ -208,13 +210,15 @@ static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals
         }
         if (!(returned.forkattr & ATTR_CMNEXT_PRIVATESIZE)) return UNSUPPORTED;
         memcpy(&private_size, field, sizeof private_size);
-        files++;
-        if (links <= 1) add_file(totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated, (uint64_t)private_size,
-                                 private_size < allocated);
-        else {
-          pthread_mutex_lock(&table_lock);
-          add_file(linked_totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated, (uint64_t)private_size,
+        if (links <= 1) {
+          add_file(totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated, (uint64_t)private_size,
                    private_size < allocated);
+          files++;
+        } else {
+          pthread_mutex_lock(&table_lock);
+          if (add_file(linked_totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated, (uint64_t)private_size,
+                       private_size < allocated))
+            files++;
           pthread_mutex_unlock(&table_lock);
         }
       }
@@ -237,7 +241,11 @@ static void *work(void *argument) {
     busy++;
     pthread_mutex_unlock(&queue_lock);
     int walked = 0;
-    int dirfd = open(item.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    const char *below = item.path + root_length;
+    while (*below == '/') below++;
+    char *opened = join(resolved_root, below);
+    int dirfd = open(opened, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    free(opened);
     if (dirfd < 0) skip(&worker->totals, item.path, NULL, errno, NULL);
     else {
       walked = walk(dirfd, item.parent, item.path, &worker->totals, worker->buffer, item.depth);
@@ -270,10 +278,8 @@ int measure(const char *path, struct totals *totals) {
     errno = saved;
     return reports < 0 ? -1 : UNSUPPORTED;
   }
-  char resolved[PATH_MAX];
-  size_t length = strlen(path);
-  if (fcntl(dirfd, F_GETPATH, resolved) < 0) root_expansion = PATH_MAX;
-  else root_expansion = strlen(resolved) > length ? strlen(resolved) - length : 0;
+  root_length = strlen(path);
+  resolved_root_length = fcntl(dirfd, F_GETPATH, resolved_root) < 0 ? 0 : strlen(resolved_root);
   int count = thread_count();
   struct worker *workers = calloc((size_t)count, sizeof *workers);
   if (!workers) out_of_memory();
