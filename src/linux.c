@@ -154,7 +154,8 @@ static int walk_queued(void *argument, void *data) {
 }
 
 /* Subdirectories are queued by their path relative to the measured directory and opened from it by another worker.
- * They are queued once the directory is listed, last first, so the LIFO queue hands them out in listing order. One whose relative path does not fit in PATH_MAX is walked here from `dirfd` instead, one thread at a time, so the
+ * They are queued once the directory is listed, last first, so the LIFO queue hands them out in listing order. One
+ * whose relative path does not fit in PATH_MAX is walked here from `dirfd` instead, one thread at a time, so the
  * descriptors held stay within one chain of MAX_DEPTH. */
 static int walk(struct worker *worker, int dirfd, dev_t dev, enum volume volume, int depth, size_t length) {
   DIR *dir = fdopendir(dirfd);
