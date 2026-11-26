@@ -44,8 +44,8 @@ const threads = values.threads ? values.threads.split(",") : [];
 function nodeModules(root, target) {
   let seed = 1;
   const random = (n) => {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    return seed % n;
+    seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+    return (seed >>> 16) % n;
   };
   const content = Buffer.alloc(32 * 1024, "x");
   let files = 0;

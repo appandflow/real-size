@@ -173,7 +173,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: bench (${{ matrix.os }}, ${{ matrix.fs }})
     env:
-      TREES: ${{ inputs.bench == 'full' && (matrix.fs == 'apfs' || matrix.fs == 'ext4' || matrix.fs == 'ntfs') && 'node-modules,million,hard-links,deep,wide' || 'node-modules,hard-links,deep,wide' }}
+      TREES: ${{ inputs.bench == 'full' && matrix.fs != 'refs' && 'node-modules,million,hard-links,deep,wide' || 'node-modules,hard-links,deep,wide' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
