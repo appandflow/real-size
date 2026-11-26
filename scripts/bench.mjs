@@ -348,6 +348,12 @@ for (const tree of trees) {
     return { tool, status: run.status, stdout: run.stdout };
   });
   const reference = outputs[0];
+  if (threads.length && reference.status !== 0) {
+    mismatches++;
+    console.error(
+      `${tree.name}: ${reference.tool.name} exited ${reference.status}`,
+    );
+  }
   for (const output of outputs.slice(1))
     if (
       output.status !== reference.status ||
