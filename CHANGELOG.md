@@ -17,6 +17,17 @@
   before any walk. A directory on such a volume that holds no regular files,
   which 0.1.1 reported as 0 bytes with exit status 0, now exits with status 2
   as well.
+- On macOS the walk lists directories on several threads: one per CPU, at
+  most 4. Linux and Windows stay single-threaded. On a 14-core Apple silicon
+  Mac this made a warm `node_modules` about 2x faster and trees of millions
+  of files about 4x faster.
+- On macOS, a tree that changes during the walk can give a different result
+  than 0.1.1 did. Directories are opened by path, so a parent directory
+  replaced by a symbolic link during the walk is followed. When a parent
+  directory is renamed during the walk, the directories queued below it are
+  left out without a message, like deleted entries. Also, when more than ten
+  entries are skipped, which ten are named on stderr can vary between runs,
+  because the walk order does; the counts and the result do not.
 
 ## 0.1.1
 

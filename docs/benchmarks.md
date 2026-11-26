@@ -42,17 +42,16 @@ the build.
 ### This Mac
 
 Apple M4 Pro, 14 cores, 48 GB, macOS 27.0, internal SSD, APFS. Warm cache, 10
-runs.
+runs, with the walk on 4 threads. Other work ran on the machine.
 
-| Tree                                                        | Files   | real-size | du -sk   | Ratio |
-| ----------------------------------------------------------- | ------- | --------- | -------- | ----- |
-| A pnpm worktree's `node_modules`, mostly clones (read only) | 168,433 | 1.01 s    | 876.4 ms | 1.15x |
-| hard links                                                  | 30,000  | 184.4 ms  | 123.8 ms | 1.49x |
-| deep tree                                                   | 117,186 | 754.7 ms  | 551.9 ms | 1.37x |
-| large files                                                 | 4       | 1.7 ms    | 1.5 ms   | 1.14x |
+| Tree                                                       | Files   | real-size | du -sk   | Ratio |
+| ---------------------------------------------------------- | ------- | --------- | -------- | ----- |
+| A pnpm project's `node_modules`, mostly clones (read only) | 147,077 | 482.6 ms  | 864.7 ms | 0.56x |
+| hard links                                                 | 30,000  | 148.1 ms  | 138.0 ms | 1.07x |
+| deep tree                                                  | 117,186 | 579.5 ms  | 618.7 ms | 0.94x |
+| large files                                                | 4       | 2.8 ms    | 1.8 ms   | 1.51x |
 
-The `node_modules` run varies by about 20% from run to run; its mean ratio
-was 0.88x in an earlier run.
+The deep tree varied most: 485.5 ms to 1.23 s.
 
 ### CI runners
 
@@ -95,7 +94,8 @@ the baseline on every runner.
   tree and 650 ms on `node_modules`); adding the private size costs 75% on the
   hard-link tree and 30% on `node_modules`. The buffer size (8 KB to 256 KB)
   and the other attributes make no measurable difference. The private size is
-  the answer, so this cost stays; no change was made to the macOS walk.
+  the answer, so this cost stays. The walk now lists directories on several
+  threads instead (see Parallelism below).
 - **Hard-link table.** It is a hash table on device and inode (and the
   128-bit file id on Windows) from the first version; the reference helper's
   linear scan was never used here. A test measures a tree with 5,000 linked
@@ -119,6 +119,15 @@ the baseline on every runner.
   the two. On ReFS and Dev Drive volumes, and for compressed, sparse or
   reparse-point files, the handle is still opened to read the extents or the
   compressed size.
-- **Parallelism** was not added. On the owner's Mac the single-threaded walk
-  is within 1.5x of `du`, and on Linux at or below it where no per-file query
-  is needed.
+- **Parallelism, macOS.** Most of the wall time of a large walk is spent
+  waiting in `getattrlistbulk`: on a tree of 7.8 million files the
+  single-threaded walk took 221 s of wall time for 88 s of CPU. The walk now
+  lists directories on one thread per CPU, at most 4. On this Mac, warm,
+  4 threads were about 2x faster than one on `node_modules` trees of about
+  150,000 files, and about 3.5x to 4x faster on a source tree of 1.9 million
+  files (46 s to 14 s) and on the 7.8 million file tree (221 s to 60 s). Past
+  4 to 8 threads the walk got slower and its CPU time, nearly all system
+  time, climbed steeply (802 s of CPU at 14 threads on the 7.8 million file
+  tree), so the count is capped at 4.
+- **Parallelism, Linux and Windows** was not added. Linux is at or below
+  `du` where no per-file query is needed.
