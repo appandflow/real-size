@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.2
+## 0.2.0
 
 - A volume mounted inside the measured tree whose filesystem cannot report
   private sizes no longer fails the whole measurement with exit status 2. It
