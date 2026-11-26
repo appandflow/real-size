@@ -138,3 +138,29 @@ test("thousands of hard links count each file once", (t) => {
   near(size.private, inside * perFile, 0);
   assert.equal(size.exact, true);
 });
+
+test("the result does not depend on the number of threads", (t) => {
+  const root = scratch(t);
+  const tree = join(root, "tree");
+  write(join(root, "outside", "shared"), 10);
+  const linked = join(tree, "p0", "d0", "nested", "f0");
+  for (let p = 0; p < 40; p++) {
+    for (let d = 0; d < 3; d++)
+      write(join(tree, `p${p}`, `d${d}`, "nested", `f${d}`), 100 + p);
+    linkSync(join(root, "outside", "shared"), join(tree, `p${p}`, "outside"));
+    if (p > 0) linkSync(linked, join(tree, `p${p}`, "inside"));
+  }
+  const runs = ["1", "2", "16"].map((threads) =>
+    cli(["--json", tree, join(tree, "p1")], {
+      env: { ...process.env, REAL_SIZE_TEST_THREADS: threads },
+    }),
+  );
+  for (const run of runs) {
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stderr, "");
+    assert.equal(run.stdout, runs[0].stdout);
+  }
+  const [whole, part] = JSON.parse(runs[0].stdout).paths;
+  assert.equal(whole.files, 121);
+  assert.equal(part.files, 5);
+});

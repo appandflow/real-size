@@ -17,7 +17,7 @@
 #define TARGET_STRING "unknown"
 #endif
 
-static void out_of_memory(void) {
+void out_of_memory(void) {
   fputs("real-size: out of memory\n", stderr);
   exit(1);
 }
