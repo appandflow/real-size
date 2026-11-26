@@ -154,7 +154,7 @@ static int walk_queued(void *argument, void *data) {
 }
 
 /* Subdirectories are queued by their path relative to the measured directory and opened from it by another worker.
- * One whose relative path does not fit in PATH_MAX is walked here from `dirfd` instead, one thread at a time, so the
+ * They are queued once the directory is listed, last first, so the LIFO queue hands them out in listing order. One whose relative path does not fit in PATH_MAX is walked here from `dirfd` instead, one thread at a time, so the
  * descriptors held stay within one chain of MAX_DEPTH. */
 static int walk(struct worker *worker, int dirfd, dev_t dev, enum volume volume, int depth, size_t length) {
   DIR *dir = fdopendir(dirfd);
@@ -170,6 +170,8 @@ static int walk(struct worker *worker, int dirfd, dev_t dev, enum volume volume,
   char *relative = worker->relative;
   uint64_t files = 0;
   int result = 0;
+  struct item **children = NULL;
+  size_t child_count = 0, child_capacity = 0;
   for (;;) {
     errno = 0;
     struct dirent *entry = readdir(dir);
@@ -211,7 +213,13 @@ static int walk(struct worker *worker, int dirfd, dev_t dev, enum volume volume,
         item->depth = depth + 1;
         item->length = child_length;
         memcpy(item->relative, relative, child_length + 1);
-        pool_push(item);
+        if (child_count == child_capacity) {
+          child_capacity = child_capacity ? child_capacity * 2 : 16;
+          struct item **grown = realloc(children, child_capacity * sizeof *children);
+          if (!grown) out_of_memory();
+          children = grown;
+        }
+        children[child_count++] = item;
         continue;
       }
       long_path_begin();
@@ -235,6 +243,8 @@ static int walk(struct worker *worker, int dirfd, dev_t dev, enum volume volume,
   }
   pool_seen(files);
   int saved = errno;
+  while (child_count > 0) pool_push(children[--child_count]);
+  free(children);
   closedir(dir);
   errno = saved;
   return result;
