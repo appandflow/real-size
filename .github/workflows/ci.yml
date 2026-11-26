@@ -93,11 +93,14 @@ jobs:
           "REAL_SIZE_REFS_DIR=R:\" >> $env:GITHUB_ENV
           "REAL_SIZE_CLONE_TOOL=$(Resolve-Path build\clone.exe)" >> $env:GITHUB_ENV
       - run: npm test
-      - name: npm test on one thread and on 16
-        shell: bash
-        run: |
-          REAL_SIZE_TEST_THREADS=1 npm test
-          REAL_SIZE_TEST_THREADS=16 npm test
+      - name: npm test on one thread
+        env:
+          REAL_SIZE_TEST_THREADS: 1
+        run: npm test
+      - name: npm test on 16 threads
+        env:
+          REAL_SIZE_TEST_THREADS: 16
+        run: npm test
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
@@ -170,7 +173,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: bench (${{ matrix.os }}, ${{ matrix.fs }})
     env:
-      TREES: ${{ inputs.bench == 'full' && matrix.fs != 'refs' && 'node-modules,million,hard-links,deep,wide' || 'node-modules,hard-links,deep,wide' }}
+      TREES: ${{ inputs.bench == 'full' && (matrix.fs == 'apfs' || matrix.fs == 'ext4' || matrix.fs == 'ntfs') && 'node-modules,million,hard-links,deep,wide' || 'node-modules,hard-links,deep,wide' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -226,7 +229,7 @@ jobs:
         shell: bash
         run: |
           nproc 2> /dev/null || echo "$NUMBER_OF_PROCESSORS"
-          df -h "$BENCH_DIR" || true
+          df -h "$BENCH_DIR" "$RUNNER_TEMP" || true
           node scripts/bench.mjs --runs 5 --warmup 1 --cold --threads 1,2,4,8 \
             --variant "0.1.1=$RELEASED" --baseline du --baseline robocopy \
             --trees "$TREES" --generate "$BENCH_DIR/bench"
