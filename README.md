@@ -238,6 +238,12 @@ descends into volumes mounted inside the tree. Another APFS volume is measured
 like the rest; any other volume is skipped as one entry and nothing in it is
 counted.
 
+Directories are listed on several threads, one per CPU and at most 4; past 4
+the walk got slower on the machines measured. Each directory is opened by its
+path when a thread takes it, so a parent directory replaced by a symbolic link
+during the walk is followed, and the directories queued below a parent renamed
+during the walk are left out. Linux and Windows walk on one thread.
+
 APFS also reports a private size below the allocation for transparently
 compressed files (decmpfs, for example files installed by some system tools),
 so a tree that holds them reports `exact: false` and a lower bound even
@@ -309,9 +315,9 @@ runner are in [docs/benchmarks.md](docs/benchmarks.md).
 
 | Machine                        | Filesystem | Tree                                  | real-size | Baseline | Ratio |
 | ------------------------------ | ---------- | ------------------------------------- | --------- | -------- | ----- |
-| Apple M4 Pro, 14 cores         | APFS       | pnpm `node_modules`, 168,433 files    | 1.01 s    | 876.4 ms | 1.15x |
-| Apple M4 Pro                   | APFS       | 30,000 files hard-linked from a store | 184.4 ms  | 123.8 ms | 1.49x |
-| Apple M4 Pro                   | APFS       | 117,186 small files, 7 levels         | 754.7 ms  | 551.9 ms | 1.37x |
+| Apple M4 Pro, 14 cores         | APFS       | pnpm `node_modules`, 147,077 files    | 482.6 ms  | 864.7 ms | 0.56x |
+| Apple M4 Pro                   | APFS       | 30,000 files hard-linked from a store | 148.1 ms  | 138.0 ms | 1.07x |
+| Apple M4 Pro                   | APFS       | 117,186 small files, 7 levels         | 579.5 ms  | 618.7 ms | 0.94x |
 | GitHub ubuntu-latest, 4 cores  | ext4       | 30,000 hard-linked files              | 91.4 ms   | 123.8 ms | 0.74x |
 | GitHub ubuntu-latest           | ext4       | 117,186 small files                   | 352.0 ms  | 594.5 ms | 0.59x |
 | GitHub ubuntu-latest           | btrfs      | 117,186 small files                   | 1.47 s    | 619.8 ms | 2.37x |
@@ -329,7 +335,8 @@ on APFS, the extent map on btrfs and XFS, and the link count on Windows.
   the total can be lower than what deleting both would free.
 - The walks stop at 256 nested directories; a deeper directory is skipped and
   counted in `skipped`.
-- Files changed during the walk may be counted in either state.
+- Files changed during the walk may be counted in either state. On macOS a
+  parent directory replaced by a symbolic link during the walk is followed.
 - The plain output's sizes are rounded; use `--json` for bytes.
 - On Linux, filesystems other than ext2/3/4, tmpfs, btrfs and XFS exit with
   status 2 even where an answer could be given, for example ZFS without
