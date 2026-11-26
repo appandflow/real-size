@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/attr.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/vnode.h>
 #include <unistd.h>
@@ -40,9 +42,17 @@ static void skip(struct totals *totals, int depth, const char *name, int error, 
 }
 
 /* APFS reports the bytes a file does not share with a clone as ATTR_CMNEXT_PRIVATESIZE (sys/attr.h), requested with
- * FSOPT_ATTR_CMN_EXTENDED. Other volume formats omit it. getattrlistbulk descends into volumes mounted inside the tree;
- * symbolic links are listed, not followed. */
-static int walk(int dirfd, struct totals *totals, char *buffer, int depth) {
+ * FSOPT_ATTR_CMN_EXTENDED. Other volume formats omit it. */
+static int reports_private_size(int fd) {
+  struct statfs info;
+  if (fstatfs(fd, &info) < 0) return -1;
+  return strcmp(info.f_fstypename, "apfs") == 0;
+}
+
+/* getattrlistbulk lists a mount point with the device of the directory it covers, so a volume mounted inside the tree
+ * shows as a change of device in its own listing, before anything in it is counted. A volume whose root lists nothing
+ * is therefore not reported as skipped; it holds nothing to count. Symbolic links are listed, not followed. */
+static int walk(int dirfd, dev_t parent, struct totals *totals, char *buffer, int depth) {
   if (progress_due()) progress_show(totals, entry_path(depth, NULL));
   struct attrlist request = {0};
   request.bitmapcount = ATTR_BIT_MAP_COUNT;
@@ -87,6 +97,15 @@ static int walk(int dirfd, struct totals *totals, char *buffer, int depth) {
       dev_t dev;
       memcpy(&dev, field, sizeof dev);
       field += sizeof(dev_t);
+      if (dev != parent) {
+        int reports = reports_private_size(dirfd);
+        if (reports <= 0) {
+          if (reports < 0) skip(totals, depth, NULL, errno, NULL);
+          else skip(totals, depth, NULL, 0, "another filesystem that cannot report private size");
+          return 0;
+        }
+        parent = dev;
+      }
       fsobj_type_t type;
       memcpy(&type, field, sizeof type);
       field += sizeof(fsobj_type_t);
@@ -102,7 +121,7 @@ static int walk(int dirfd, struct totals *totals, char *buffer, int depth) {
           skip(totals, depth, name, errno, NULL);
         else {
           names[depth + 1] = name;
-          int walked = walk(child, totals, buffer + BUFFER_SIZE, depth + 1);
+          int walked = walk(child, dev, totals, buffer + BUFFER_SIZE, depth + 1);
           close(child);
           if (walked < 0) return walked;
         }
@@ -137,8 +156,16 @@ int measure(const char *path, struct totals *totals) {
   }
   int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (dirfd < 0) return -1;
+  struct stat info;
+  int reports = fstat(dirfd, &info) < 0 ? -1 : reports_private_size(dirfd);
+  if (reports <= 0) {
+    int saved = errno;
+    close(dirfd);
+    errno = saved;
+    return reports < 0 ? -1 : UNSUPPORTED;
+  }
   root_path = path;
-  int walked = walk(dirfd, totals, buffers, 0);
+  int walked = walk(dirfd, info.st_dev, totals, buffers, 0);
   int saved = errno;
   close(dirfd);
   errno = saved;

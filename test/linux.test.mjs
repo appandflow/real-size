@@ -35,6 +35,22 @@ test("Linux: a filesystem that cannot tell exits 2", { skip: !linux }, () => {
   assert.match(run.stderr, /cannot report/);
 });
 
+test(
+  "Linux: a filesystem that cannot tell inside the tree is skipped",
+  { skip: !linux },
+  () => {
+    const run = cli(["--json", "/dev"]);
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(
+      run.stderr,
+      /^real-size: \/dev\/\S+: another filesystem that cannot report private size$/m,
+    );
+    const size = JSON.parse(run.stdout).paths[0];
+    assert.ok(size.skipped >= 1);
+    assert.equal(size.exact, false);
+  },
+);
+
 const reflinkRoots = (process.env.REAL_SIZE_REFLINK_DIRS ?? "")
   .split(":")
   .filter(Boolean);

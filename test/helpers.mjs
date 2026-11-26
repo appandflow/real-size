@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -50,4 +50,67 @@ export function near(actual, expected, tolerance = 64 * 1024) {
     Math.abs(actual - expected) <= tolerance,
     `expected about ${expected} bytes, got ${actual}`,
   );
+}
+
+function attached(mount) {
+  return execFileSync("hdiutil", ["info"], { encoding: "utf8" })
+    .split("\n")
+    .some((line) => line.endsWith(`\t${mount}`));
+}
+
+function detach(mount, device) {
+  for (let attempt = 0; attempt < 5 && attached(mount); attempt++) {
+    if (attempt > 0)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    spawnSync("hdiutil", ["detach", "-force", device ?? mount], {
+      stdio: "ignore",
+    });
+  }
+  if (attached(mount))
+    throw new Error(`could not detach the image at ${mount}`);
+}
+
+/**
+ * A fresh directory with an HFS+ image file in it, for macOS tests. `attach(mount)` attaches the image at `mount`
+ * and returns false when it cannot. After the test one hook detaches the image, retrying, and only then removes the
+ * directory, so a removal never runs into a volume that is still attached.
+ */
+export function diskImage(t) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "real-size-")));
+  const image = join(root, "hfs.dmg");
+  let mounted;
+  let device;
+  t.after(() => {
+    if (mounted) detach(mounted, device);
+    rmSync(root, { recursive: true, force: true });
+  });
+  return {
+    root,
+    attach(mount) {
+      try {
+        execFileSync("hdiutil", [
+          "create",
+          "-quiet",
+          "-size",
+          "8m",
+          "-fs",
+          "HFS+",
+          "-volname",
+          "real-size",
+          image,
+        ]);
+        mkdirSync(mount, { recursive: true });
+        mounted = mount;
+        const output = execFileSync(
+          "hdiutil",
+          ["attach", "-nobrowse", "-mountpoint", mount, image],
+          { encoding: "utf8" },
+        );
+        device = output.match(/^\/dev\/disk\d+/m)?.[0];
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
 }

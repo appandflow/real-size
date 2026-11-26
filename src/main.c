@@ -263,8 +263,8 @@ int real_size_main(int argc, char **argv) {
            "\n"
            "Exit status: 0 when every path was measured in full; 1 on a usage error, when\n"
            "a path cannot be read (nothing printed), or when entries below a path were\n"
-           "skipped (sizes printed); 2 when the filesystem cannot report the bytes deleting\n"
-           "a path would free.");
+           "skipped (sizes printed); 2 when the filesystem a path is on cannot report the\n"
+           "bytes deleting it would free.");
       return 0;
     } else if (options && strcmp(arg, "--version") == 0) {
       puts(VERSION_STRING " (" TARGET_STRING ")");

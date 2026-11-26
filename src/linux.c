@@ -158,11 +158,8 @@ static int walk(int dirfd, dev_t dev, enum volume volume, struct totals *totals,
         if (classified < 0) {
           int saved = errno;
           close(child);
-          if (classified == UNSUPPORTED) {
-            result = UNSUPPORTED;
-            break;
-          }
-          skip(totals, length, name, saved, NULL);
+          if (classified == UNSUPPORTED) skip(totals, length, name, 0, "another filesystem that cannot report private size");
+          else skip(totals, length, name, saved, NULL);
           continue;
         }
       }

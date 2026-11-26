@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { linkSync } from "node:fs";
+import { linkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cli, MiB, measure, near, scratch, write } from "./helpers.mjs";
+import {
+  cli,
+  diskImage,
+  MiB,
+  measure,
+  near,
+  scratch,
+  write,
+} from "./helpers.mjs";
 
 const darwin = process.platform === "darwin";
 
@@ -70,41 +78,51 @@ test(
   "macOS: a volume without private sizes exits 2",
   { skip: !darwin },
   (t) => {
-    const root = scratch(t);
-    const image = join(root, "hfs.dmg");
-    const mount = join(root, "mount");
-    try {
-      execFileSync("hdiutil", [
-        "create",
-        "-quiet",
-        "-size",
-        "8m",
-        "-fs",
-        "HFS+",
-        "-volname",
-        "real-size",
-        image,
-      ]);
-      execFileSync("hdiutil", [
-        "attach",
-        "-quiet",
-        "-nobrowse",
-        "-mountpoint",
-        mount,
-        image,
-      ]);
-    } catch (error) {
-      t.skip(`could not attach an HFS+ image: ${error.message}`);
+    const disk = diskImage(t);
+    const mount = join(disk.root, "mount");
+    if (!disk.attach(mount)) {
+      t.skip("could not attach an HFS+ image");
       return;
     }
-    try {
-      write(join(mount, "tree", "file"), 10);
-      const run = cli(["--json", join(mount, "tree")]);
+    write(join(mount, "tree", "file"), 10);
+    mkdirSync(join(mount, "empty"));
+    for (const path of [join(mount, "tree"), join(mount, "empty")]) {
+      const run = cli(["--json", path]);
       assert.equal(run.status, 2, run.stderr);
       assert.equal(run.stdout, "");
       assert.match(run.stderr, /cannot report/);
-    } finally {
-      execFileSync("hdiutil", ["detach", "-quiet", "-force", mount]);
     }
+  },
+);
+
+test(
+  "macOS: a volume without private sizes inside the tree is skipped",
+  { skip: !darwin },
+  (t) => {
+    const disk = diskImage(t);
+    const tree = join(disk.root, "tree");
+    const mount = join(tree, "sub", "mount");
+    write(join(tree, "a"));
+    write(join(tree, "sub", "b"));
+    mkdirSync(mount);
+    const without = measure(tree);
+    if (!disk.attach(mount)) {
+      t.skip("could not attach an HFS+ image");
+      return;
+    }
+    write(join(mount, "file"), 10);
+    write(join(mount, "deeper", "file"), 10);
+    const run = cli(["--json", tree]);
+    assert.equal(run.status, 1, run.stderr);
+    assert.equal(
+      run.stderr,
+      `real-size: ${mount}: another filesystem that cannot report private size\n`,
+    );
+    const size = JSON.parse(run.stdout).paths[0];
+    assert.equal(size.skipped, 1);
+    assert.equal(size.exact, false);
+    assert.equal(size.files, without.files);
+    assert.equal(size.allocated, without.allocated);
+    assert.equal(size.private, without.private);
   },
 );
