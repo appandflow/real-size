@@ -242,7 +242,8 @@ Directories are listed on several threads, one per CPU and at most 4; past 4
 the walk got slower on the machines measured. Each directory is opened by its
 path when a thread takes it, so a parent directory replaced by a symbolic link
 during the walk is followed, and the directories queued below a parent renamed
-during the walk are left out. Linux and Windows walk on one thread.
+during the walk are left out. Linux and Windows walk the same way, with the
+same cap.
 
 APFS also reports a private size below the allocation for transparently
 compressed files (decmpfs, for example files installed by some system tools),
@@ -310,7 +311,8 @@ once. Network shares (UNC paths and mapped drives) exit with status 2.
 ## Speed
 
 Warm-cache wall time of the bare binary against `du -sk` (macOS, Linux) or
-`robocopy /L` (Windows), 10 runs each. Method, cold-cache runs and every
+`robocopy /L` (Windows), on 4 threads: 10 runs each on the Mac, 5 on the
+GitHub runners. Method, cold-cache runs and every
 runner are in [docs/benchmarks.md](docs/benchmarks.md).
 
 | Machine                        | Filesystem | Tree                                  | real-size | Baseline | Ratio |
@@ -318,12 +320,12 @@ runner are in [docs/benchmarks.md](docs/benchmarks.md).
 | Apple M4 Pro, 14 cores         | APFS       | pnpm `node_modules`, 147,077 files    | 482.6 ms  | 864.7 ms | 0.56x |
 | Apple M4 Pro                   | APFS       | 30,000 files hard-linked from a store | 148.1 ms  | 138.0 ms | 1.07x |
 | Apple M4 Pro                   | APFS       | 117,186 small files, 7 levels         | 579.5 ms  | 618.7 ms | 0.94x |
-| GitHub ubuntu-latest, 4 cores  | ext4       | 30,000 hard-linked files              | 91.4 ms   | 123.8 ms | 0.74x |
-| GitHub ubuntu-latest           | ext4       | 117,186 small files                   | 352.0 ms  | 594.5 ms | 0.59x |
-| GitHub ubuntu-latest           | btrfs      | 117,186 small files                   | 1.47 s    | 619.8 ms | 2.37x |
-| GitHub ubuntu-latest           | XFS        | 117,186 small files                   | 747.1 ms  | 521.4 ms | 1.43x |
-| GitHub windows-latest, 4 cores | NTFS       | 30,000 hard-linked files              | 337.8 ms  | 135.1 ms | 2.50x |
-| GitHub windows-latest          | NTFS       | 117,186 small files                   | 1.66 s    | 690.4 ms | 2.40x |
+| GitHub ubuntu-latest, 4 cores  | ext4       | 30,000 hard-linked files              | 25.5 ms   | 62.0 ms  | 0.41x |
+| GitHub ubuntu-latest           | ext4       | 117,186 small files                   | 68.8 ms   | 292.6 ms | 0.24x |
+| GitHub ubuntu-latest           | btrfs      | 117,186 small files                   | 416.6 ms  | 563.6 ms | 0.74x |
+| GitHub ubuntu-latest           | XFS        | 117,186 small files                   | 217.9 ms  | 498.3 ms | 0.44x |
+| GitHub windows-latest, 4 cores | NTFS       | 30,000 hard-linked files              | 144.8 ms  | 89.2 ms  | 1.62x |
+| GitHub windows-latest          | NTFS       | 117,186 small files                   | 504.0 ms  | 411.4 ms | 1.23x |
 
 The extra time is the per-file question `du` does not ask: the private size
 on APFS, the extent map on btrfs and XFS, and the link count on Windows.

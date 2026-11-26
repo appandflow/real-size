@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0
+
+- On Linux and Windows the walk lists directories on several threads, as on
+  macOS: one per CPU, at most 4. On 4-core GitHub-hosted runners, 4 threads
+  were about 1.3x to 3x faster than 0.1.1 and 0.2.0 on trees of many
+  directories, warm, on ext4, btrfs, XFS, NTFS and ReFS, and faster cold on
+  ext4, btrfs and XFS. A single directory of many files walks at the same
+  speed as before.
+- On Linux and Windows, a tree that changes during the walk can give a
+  different result than 0.2.0 did, as on macOS since 0.2.0. Directories are
+  opened by path, so a parent directory replaced by a symbolic link during
+  the walk is followed. When a parent directory is renamed during the walk,
+  the directories queued below it are left out without a message, like
+  deleted entries. When more than ten entries are skipped, which ten are
+  named on stderr can vary between runs; the counts and the result do not.
+
 ## 0.2.0
 
 - A volume mounted inside the measured tree whose filesystem cannot report
