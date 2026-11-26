@@ -1,8 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <pthread.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,37 +14,20 @@
 #include "real-size.h"
 
 #define BUFFER_SIZE (64 * 1024)
-#define MAX_THREADS 4
 
 struct item {
-  char *path;
   dev_t parent;
   int depth;
+  char path[];
 };
 
 struct worker {
-  pthread_t thread;
   struct totals totals;
   char *buffer;
 };
 
-static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t table_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t output_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t long_path_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
-static pthread_cond_t queue_changed = PTHREAD_COND_INITIALIZER;
-static struct item *queue;
-static size_t queued, queue_capacity, busy;
-static int stop_result;
-static struct totals *linked_totals;
 static char resolved_root[PATH_MAX];
 static size_t root_length, resolved_root_length;
-static atomic_uint_fast64_t files_seen;
-
-static void out_of_memory(void) {
-  fputs("real-size: out of memory\n", stderr);
-  exit(1);
-}
 
 static char *join(const char *parent, const char *name) {
   size_t parent_length = strlen(parent), name_length = strlen(name);
@@ -61,36 +42,23 @@ static char *join(const char *parent, const char *name) {
 
 static void skip(struct totals *totals, const char *path, const char *name, int error, const char *reason) {
   if (error == ENOENT || error == ENOTDIR) return;
-  pthread_mutex_lock(&output_lock);
+  output_begin();
   if (skip_entry(totals)) {
     char *shown = name ? join(path, name) : NULL;
     skip_message(shown ? shown : path, reason ? reason : strerror(error));
     free(shown);
   }
-  pthread_mutex_unlock(&output_lock);
+  output_end();
 }
 
-static void push(char *path, dev_t parent, int depth) {
-  pthread_mutex_lock(&queue_lock);
-  if (queued == queue_capacity) {
-    queue_capacity = queue_capacity ? queue_capacity * 2 : 256;
-    struct item *grown = realloc(queue, queue_capacity * sizeof *queue);
-    if (!grown) out_of_memory();
-    queue = grown;
-  }
-  queue[queued++] = (struct item){path, parent, depth};
-  pthread_cond_signal(&queue_changed);
-  pthread_mutex_unlock(&queue_lock);
-}
-
-static void show_progress(const char *path) {
-  if (pthread_mutex_trylock(&output_lock) != 0) return;
-  if (progress_due()) {
-    struct totals view = {0};
-    view.files = atomic_load(&files_seen);
-    progress_show(&view, path);
-  }
-  pthread_mutex_unlock(&output_lock);
+static void push(const char *path, dev_t parent, int depth) {
+  size_t length = strlen(path) + 1;
+  struct item *item = malloc(sizeof *item + length);
+  if (!item) out_of_memory();
+  item->parent = parent;
+  item->depth = depth;
+  memcpy(item->path, path, length);
+  pool_push(item);
 }
 
 /* APFS reports the bytes a file does not share with a clone as ATTR_CMNEXT_PRIVATESIZE (sys/attr.h), requested with
@@ -108,7 +76,7 @@ static int reports_private_size(int fd) {
  * links to expand; one whose path would not fit in PATH_MAX, which open(2) rejects, is walked here from `dirfd`
  * instead, one thread at a time so the descriptors held stay within one chain of MAX_DEPTH. */
 static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals, char *buffer, int depth) {
-  show_progress(path);
+  if (progress_begin()) progress_end(path);
   struct attrlist request = {0};
   request.bitmapcount = ATTR_BIT_MAP_COUNT;
   request.commonattr =
@@ -171,19 +139,20 @@ static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals
       if (type == VDIR) {
         char *child_path = join(path, name);
         if (pause_at && strcmp(name, pause_at) == 0) {
-          pthread_mutex_lock(&output_lock);
+          output_begin();
           test_pause(child_path);
-          pthread_mutex_unlock(&output_lock);
+          output_end();
         }
         int child = -1;
         if (depth + 1 >= MAX_DEPTH) {
           skip(totals, path, name, ELOOP, "more than " MAX_DEPTH_TEXT " nested directories");
           free(child_path);
-        } else if (resolved_root_length > 0 && resolved_root_length + 1 + strlen(child_path) - root_length < PATH_MAX)
+        } else if (resolved_root_length > 0 && resolved_root_length + 1 + strlen(child_path) - root_length < PATH_MAX) {
           push(child_path, dev, depth + 1);
-        else {
+          free(child_path);
+        } else {
           int walked = 0;
-          pthread_mutex_lock(&long_path_lock);
+          long_path_begin();
           if ((child = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)) < 0)
             skip(totals, path, name, errno, NULL);
           else {
@@ -193,7 +162,7 @@ static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals
             free(child_buffer);
             close(child);
           }
-          pthread_mutex_unlock(&long_path_lock);
+          long_path_end();
           free(child_path);
           if (walked < 0) return walked;
         }
@@ -210,61 +179,30 @@ static int walk(int dirfd, dev_t parent, const char *path, struct totals *totals
         }
         if (!(returned.forkattr & ATTR_CMNEXT_PRIVATESIZE)) return UNSUPPORTED;
         memcpy(&private_size, field, sizeof private_size);
-        if (links <= 1) {
-          add_file(totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated, (uint64_t)private_size,
-                   private_size < allocated);
-          files++;
-        } else {
-          pthread_mutex_lock(&table_lock);
-          if (add_file(linked_totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated, (uint64_t)private_size,
-                       private_size < allocated))
-            files++;
-          pthread_mutex_unlock(&table_lock);
-        }
+        files += (uint64_t)count_file(totals, (uint64_t)dev, id, 0, links, (uint64_t)allocated,
+                                      (uint64_t)private_size, private_size < allocated, NULL);
       }
       entry += length;
     }
-    atomic_fetch_add(&files_seen, files);
+    pool_seen(files);
   }
 }
 
-static void *work(void *argument) {
+static int walk_queued(void *argument, void *data) {
   struct worker *worker = argument;
-  for (;;) {
-    pthread_mutex_lock(&queue_lock);
-    while (queued == 0 && busy > 0 && stop_result == 0) pthread_cond_wait(&queue_changed, &queue_lock);
-    if (queued == 0 || stop_result != 0) {
-      pthread_mutex_unlock(&queue_lock);
-      return NULL;
-    }
-    struct item item = queue[--queued];
-    busy++;
-    pthread_mutex_unlock(&queue_lock);
-    int walked = 0;
-    const char *below = item.path + root_length;
-    while (*below == '/') below++;
-    char *opened = join(resolved_root, below);
-    int dirfd = open(opened, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    free(opened);
-    if (dirfd < 0) skip(&worker->totals, item.path, NULL, errno, NULL);
-    else {
-      walked = walk(dirfd, item.parent, item.path, &worker->totals, worker->buffer, item.depth);
-      close(dirfd);
-    }
-    free(item.path);
-    pthread_mutex_lock(&queue_lock);
-    busy--;
-    if (walked < 0 && stop_result == 0) stop_result = walked;
-    if (stop_result != 0 || (queued == 0 && busy == 0)) pthread_cond_broadcast(&queue_changed);
-    pthread_mutex_unlock(&queue_lock);
+  struct item *item = data;
+  int walked = 0;
+  const char *below = item->path + root_length;
+  while (*below == '/') below++;
+  char *opened = join(resolved_root, below);
+  int dirfd = open(opened, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  free(opened);
+  if (dirfd < 0) skip(&worker->totals, item->path, NULL, errno, NULL);
+  else {
+    walked = walk(dirfd, item->parent, item->path, &worker->totals, worker->buffer, item->depth);
+    close(dirfd);
   }
-}
-
-static int thread_count(void) {
-  const char *configured = environment("REAL_SIZE_TEST_THREADS");
-  long count = configured ? strtol(configured, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
-  if (!configured && count > MAX_THREADS) count = MAX_THREADS;
-  return count < 1 ? 1 : (int)count;
+  return walked;
 }
 
 int measure(const char *path, struct totals *totals) {
@@ -280,7 +218,7 @@ int measure(const char *path, struct totals *totals) {
   }
   root_length = strlen(path);
   resolved_root_length = fcntl(dirfd, F_GETPATH, resolved_root) < 0 ? 0 : strlen(resolved_root);
-  int count = thread_count();
+  int count = pool_threads();
   struct worker *workers = calloc((size_t)count, sizeof *workers);
   if (!workers) out_of_memory();
   for (int i = 0; i < count; i++) {
@@ -288,30 +226,12 @@ int measure(const char *path, struct totals *totals) {
     workers[i].buffer = malloc(BUFFER_SIZE);
     if (!workers[i].buffer) out_of_memory();
   }
-  linked_totals = totals;
-  queued = busy = 0;
-  stop_result = 0;
-  atomic_store(&files_seen, 0);
+  pool_begin(totals);
   int walked = walk(dirfd, info.st_dev, path, &workers[0].totals, workers[0].buffer, 0);
   int saved = errno;
   close(dirfd);
-  if (walked == 0) {
-    int started = 1;
-    for (; started < count; started++)
-      if (pthread_create(&workers[started].thread, NULL, work, &workers[started]) != 0) break;
-    work(&workers[0]);
-    for (int i = 1; i < started; i++) pthread_join(workers[i].thread, NULL);
-    walked = stop_result;
-  }
-  while (queued > 0) free(queue[--queued].path);
-  for (int i = 0; i < count; i++) {
-    totals->allocated += workers[i].totals.allocated;
-    totals->private_size += workers[i].totals.private_size;
-    totals->files += workers[i].totals.files;
-    totals->skipped += workers[i].totals.skipped;
-    totals->exact &= workers[i].totals.exact;
-    free(workers[i].buffer);
-  }
+  walked = pool_run(workers, sizeof *workers, count, walk_queued, walked);
+  for (int i = 0; i < count; i++) free(workers[i].buffer);
   free(workers);
   errno = saved;
   return walked;

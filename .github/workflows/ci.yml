@@ -4,6 +4,13 @@ on:
     branches: ["**"]
   pull_request:
   workflow_call:
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: "quick: trees of up to 160,000 files; full: adds one of about 1,000,000"
+        type: choice
+        options: [quick, full]
+        default: quick
 permissions:
   contents: read
 jobs:
@@ -86,6 +93,14 @@ jobs:
           "REAL_SIZE_REFS_DIR=R:\" >> $env:GITHUB_ENV
           "REAL_SIZE_CLONE_TOOL=$(Resolve-Path build\clone.exe)" >> $env:GITHUB_ENV
       - run: npm test
+      - name: npm test on one thread
+        env:
+          REAL_SIZE_TEST_THREADS: 1
+        run: npm test
+      - name: npm test on 16 threads
+        env:
+          REAL_SIZE_TEST_THREADS: 16
+        run: npm test
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.4
@@ -94,22 +109,71 @@ jobs:
         with:
           name: prebuild-${{ matrix.target }}
           path: prebuilds/
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: btrfs and XFS loopback mounts
+        run: |
+          sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
+          for fs in btrfs xfs; do truncate -s 4G "$RUNNER_TEMP/$fs.img"; done
+          mkfs.btrfs -q "$RUNNER_TEMP/btrfs.img"
+          mkfs.xfs -q -m reflink=1 "$RUNNER_TEMP/xfs.img"
+          for fs in btrfs xfs; do
+            sudo mkdir -p "/mnt/$fs"
+            sudo mount -o loop "$RUNNER_TEMP/$fs.img" "/mnt/$fs"
+            sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
+          done
+          echo "REAL_SIZE_REFLINK_DIRS=/mnt/btrfs:/mnt/xfs" >> "$GITHUB_ENV"
+      - name: Build with ThreadSanitizer
+        run: |
+          sudo sysctl vm.mmap_rnd_bits=28
+          version=$(node -p 'require("./package.json").version')
+          mkdir -p prebuilds/linux-x64
+          clang -std=c11 -O1 -g -fsanitize=thread -Wall -Wextra -Werror -Wno-gnu-variable-sized-type-not-at-end -pthread \
+            -DREAL_SIZE_VERSION=$version -DREAL_SIZE_TARGET=linux-x64 \
+            src/main.c src/linux.c src/pool.c src/posix.c -o prebuilds/linux-x64/real-size
+      - name: npm test on 8 threads
+        env:
+          REAL_SIZE_TEST_THREADS: 8
+          TSAN_OPTIONS: halt_on_error=1:exitcode=66
+        run: npm test
+      - name: Same output on 1, 8 and 32 threads, on ext4, btrfs and XFS
+        env:
+          TSAN_OPTIONS: halt_on_error=1:exitcode=66
+        run: |
+          for dir in "$RUNNER_TEMP" /mnt/btrfs /mnt/xfs; do
+            echo "### $dir"
+            node scripts/bench.mjs --runs 1 --warmup 0 --threads 1,8,32 --trees node-modules,hard-links,deep \
+              --generate "$dir/tsan"
+          done
   bench:
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-          - os: macos-15-intel
-          - os: ubuntu-latest
-          - os: ubuntu-24.04-arm
-          - os: windows-latest
-            msvc: x64
-          - os: windows-11-arm
-            msvc: arm64
+          - { os: macos-latest, fs: apfs }
+          - { os: macos-15-intel, fs: apfs }
+          - { os: ubuntu-latest, fs: ext4 }
+          - { os: ubuntu-latest, fs: btrfs }
+          - { os: ubuntu-latest, fs: xfs }
+          - { os: ubuntu-24.04-arm, fs: ext4 }
+          - { os: ubuntu-24.04-arm, fs: btrfs }
+          - { os: ubuntu-24.04-arm, fs: xfs }
+          - { os: windows-latest, msvc: x64, fs: ntfs }
+          - { os: windows-latest, msvc: x64, fs: refs }
+          - { os: windows-11-arm, msvc: arm64, fs: ntfs }
+          - { os: windows-11-arm, msvc: arm64, fs: refs }
     runs-on: ${{ matrix.os }}
-    name: bench (${{ matrix.os }})
+    name: bench (${{ matrix.os }}, ${{ matrix.fs }})
+    env:
+      TREES: ${{ inputs.bench == 'full' && matrix.fs != 'refs' && 'node-modules,million,hard-links,deep,wide' || 'node-modules,hard-links,deep,wide' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -120,23 +184,55 @@ jobs:
         with:
           arch: ${{ matrix.msvc }}
       - run: npm run build
-      - name: Benchmark on the runner's disk
+      - name: The released 0.1.1 binary
         shell: bash
-        run: node scripts/bench.mjs --cold --generate "$RUNNER_TEMP/bench"
-      - name: Benchmark on btrfs and XFS
-        if: runner.os == 'Linux'
+        run: |
+          mkdir "$RUNNER_TEMP/released"
+          cd "$RUNNER_TEMP/released"
+          npm pack real-size@0.1.1 --silent
+          tar -xzf real-size-0.1.1.tgz
+          target=$(node -p 'process.platform + "-" + process.arch')
+          suffix=$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+          echo "RELEASED=$RUNNER_TEMP/released/package/prebuilds/$target/real-size$suffix" >> "$GITHUB_ENV"
+      - name: Disk
+        if: matrix.fs == 'apfs' || matrix.fs == 'ext4' || matrix.fs == 'ntfs'
+        shell: bash
+        run: echo "BENCH_DIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: btrfs or XFS loopback mount
+        if: matrix.fs == 'btrfs' || matrix.fs == 'xfs'
         run: |
           sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
-          for fs in btrfs xfs; do truncate -s 4G "$RUNNER_TEMP/$fs.img"; done
-          mkfs.btrfs -q "$RUNNER_TEMP/btrfs.img"
-          mkfs.xfs -q -m reflink=1 "$RUNNER_TEMP/xfs.img"
-          for fs in btrfs xfs; do
-            sudo mkdir -p "/mnt/$fs"
-            sudo mount -o loop "$RUNNER_TEMP/$fs.img" "/mnt/$fs"
-            sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
-            echo "### $fs"
-            node scripts/bench.mjs --cold --generate "/mnt/$fs/bench"
-          done
+          truncate -s 16G "$RUNNER_TEMP/fs.img"
+          if [ "${{ matrix.fs }}" = btrfs ]; then mkfs.btrfs -q "$RUNNER_TEMP/fs.img"; else mkfs.xfs -q -m reflink=1 "$RUNNER_TEMP/fs.img"; fi
+          sudo mkdir -p /mnt/bench
+          sudo mount -o loop "$RUNNER_TEMP/fs.img" /mnt/bench
+          sudo chown "$(id -u):$(id -g)" /mnt/bench
+          echo "BENCH_DIR=/mnt/bench" >> "$GITHUB_ENV"
+      - name: ReFS volume
+        if: matrix.fs == 'refs'
+        shell: pwsh
+        run: |
+          $vhd = Join-Path $env:RUNNER_TEMP 'refs.vhdx'
+          $script = Join-Path $env:RUNNER_TEMP 'refs.txt'
+          @(
+            "create vdisk file=`"$vhd`" maximum=16384 type=expandable",
+            "select vdisk file=`"$vhd`"",
+            'attach vdisk',
+            'create partition primary',
+            'format fs=refs quick label=refs',
+            'assign letter=R'
+          ) | Set-Content -Encoding ascii $script
+          diskpart /s $script
+          if ($LASTEXITCODE -ne 0) { throw "diskpart failed with $LASTEXITCODE" }
+          "BENCH_DIR=R:\" >> $env:GITHUB_ENV
+      - name: Benchmark on 1, 2, 4 and 8 threads
+        shell: bash
+        run: |
+          nproc 2> /dev/null || echo "$NUMBER_OF_PROCESSORS"
+          df -h "$BENCH_DIR" "$RUNNER_TEMP" || true
+          node scripts/bench.mjs --runs 5 --warmup 1 --cold --threads 1,2,4,8 \
+            --variant "0.1.1=$RELEASED" --baseline du --baseline robocopy \
+            --trees "$TREES" --generate "$BENCH_DIR/bench"
   package:
     needs: platforms
     runs-on: ubuntu-latest
